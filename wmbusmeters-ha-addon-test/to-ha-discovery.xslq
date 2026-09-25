@@ -130,7 +130,11 @@ xsl:stylesheet(version                 = 1.0
                info
                change
             */
-            xsl:for-each(select = telegram/details/*)
+            /* Fields marked DEPRECATED in the driver get no entity, their replacement is sent as well. */
+            xsl:variable(name   = deprecated
+                         select = "$drvx/driver/fields/field[contains(attributes, 'DEPRECATED')]")
+            xsl:for-each(select = "telegram/details/*[not($deprecated/name = name())
+                                                      and not(unit and $deprecated/name = substring-before(name(), concat('_', unit)))]")
             {
                 xsl:variable(name   = field_name
                              select = 'name()')
