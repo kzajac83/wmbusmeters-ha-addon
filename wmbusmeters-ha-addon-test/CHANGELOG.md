@@ -1,3 +1,7 @@
+## 3.0.0.179 
+- **Breaking change:**
+  TEST from kzajac83: local test of the breaking change notice.
+  Some sensors of this add-on were renamed, see the changelog.
 ## 3.0.0.178 
 - Updated to version [3.0.0.178](https://github.com/wmbusmeters/wmbusmeters/commits/master)
 ## 3.0.0.177 
