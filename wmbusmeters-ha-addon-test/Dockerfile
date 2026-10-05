@@ -22,7 +22,7 @@ RUN apk add --no-cache \
 # This was only being used to invalidate Docker's cache and is now failing
 # because GitHub returns HTTP 403 to the unauthenticated BuildKit request.
 RUN git clone --depth 1 https://github.com/steve-m/librtlsdr.git && \
-    git clone --depth 1 https://github.com/wmbusmeters/wmbusmeters.git && \
+    git clone --depth 1 -b driver-flags-apator https://github.com/kzajac83/wmbusmeters.git wmbusmeters && \
     git clone --depth 1 https://github.com/libxmq/xmq.git && \
     git clone --depth 1 https://github.com/wmbusmeters/rtl-wmbus.git && \
     git clone --depth 1 https://github.com/merbanan/rtl_433.git && \

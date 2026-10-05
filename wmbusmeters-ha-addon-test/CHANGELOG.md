@@ -1,3 +1,5 @@
+## 3.0.0.189 
+- kzajac83 local test: per-flag binary sensors (disabled by default), Apator driver flags from kzajac83/wmbusmeters driver-flags-apator.
 ## 3.0.0.188 
 - Updated to version [3.0.0.188](https://github.com/wmbusmeters/wmbusmeters/commits/master)
 ## 3.0.0.182 
