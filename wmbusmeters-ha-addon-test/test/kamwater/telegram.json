@@ -4,6 +4,22 @@
   "driver": "kamwater",
   "name": "MM",
   "id": "23813076",
+  "flow_m3h": 0.035,
+  "max_external_temperature_last_month_c": 27,
+  "max_flow_last_month_m3h": 0,
+  "min_external_temperature_last_month_c": 10,
+  "target_m3": 0,
+  "target_date": "2022-11-01",
+  "total_m3": 3.871,
+  "accoustic_noise": "08900008F0FF",
+  "status": "OK",
+  "time_bursting": "",
+  "time_dry": "1-8 hours",
+  "time_flow_above_q4": "",
+  "time_leaking": "",
+  "time_low_ambient_temperature": "",
+  "time_reversed": "",
+  "timestamp": "2026-10-05T16:26:19Z",
   "details": {
     "fields": {
       "flow_m3h": {
@@ -54,7 +70,7 @@
       },
       "status": {
         "quantity": "Text",
-        "info": "Status and error flags."
+        "info": ""
       },
       "time_bursting": {
         "quantity": "Text",
@@ -81,22 +97,25 @@
         "info": "Amount of time the meter has been reversed."
       }
     },
-    "mvt": "KAW,3c,16"
-  },
-  "flow_m3h": 0.035,
-  "max_external_temperature_last_month_c": 27,
-  "max_flow_last_month_m3h": 0,
-  "min_external_temperature_last_month_c": 10,
-  "target_m3": 0,
-  "target_date": "2022-11-01",
-  "total_m3": 3.871,
-  "accoustic_noise": "08900008F0FF",
-  "status": "OK",
-  "time_bursting": "",
-  "time_dry": "1-8 hours",
-  "time_flow_above_q4": "",
-  "time_leaking": "",
-  "time_low_ambient_temperature": "",
-  "time_reversed": "",
-  "timestamp": "2026-09-26T17:42:16Z"
+    "mvt": "KAW,3c,16",
+    "flags": {
+      "ALARM": "Abnormal condition/alarm. (tpl sts)",
+      "BURST": "The flow of water has been consistently high for half an hour, which indicates a pipe burst.",
+      "BUSY": "Meter busy. (tpl sts)",
+      "DRY": "The is no water in the meter. Nothing will be measured.",
+      "ERROR": "Meter error; details via error reporting. (tpl sts)",
+      "FAILED_DECODE": "The telegram failed a manufacturer specific decode or decryption.",
+      "FLOW_ABOVE_Q4": "The water flow has exceeded the upper flow limit Q4 which can cause too high error rate.",
+      "HIGH_AMBIENT_TEMPERATURE": "The ambient temperature is above the configured upper temperature limit.",
+      "LEAK": "The flow of water has not stopped for at least one continuous hour during the last 24 hours.",
+      "LOW_AMBIENT_TEMPERATURE": "The ambient temperature is below the configured lower temperature limit.",
+      "LOW_BATTERY": "The battery is running low. Less than 6 months remaining.",
+      "NO_CONSUMPTION": "No flow of water has occurred for the last 15 days.",
+      "PERMANENT_ERROR": "Permanent meter error. (tpl sts)",
+      "POWER_LOW": "Power low. (tpl sts)",
+      "REVERSE": "The water flows through the meter in the wrong direction.",
+      "TAMPER": "Attempt of fraud. The meter is no longer valid for billing.",
+      "TEMPORARY_ERROR": "Temporary meter error. (tpl sts)"
+    }
+  }
 }

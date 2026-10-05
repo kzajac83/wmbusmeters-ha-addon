@@ -492,6 +492,93 @@ xsl:stylesheet(version                 = 1.0
                     }
                 }
             }
+            /* One binary sensor per flag the driver declares (details/flags: name -> info),
+               disabled by default, so that the user decides which flags matter.
+               It reads the main status text: status, or current_status when there is no status. */
+            xsl:variable(name = flag_field) {
+                xsl:choose {
+                    xsl:when(test = "telegram/details/fields/status[not(deprecated_by)]") {
+                        xsl:text = status
+                    }
+                    xsl:when(test = "telegram/details/fields/current_status[not(deprecated_by)]") {
+                        xsl:text = current_status
+                    }
+                }
+            }
+            xsl:if(test = "$flag_field != ''") {
+                xsl:for-each(select = telegram/details/flags/*)
+                {
+                    xsl:variable(name   = flag
+                                 select = 'name()')
+                    xsl:variable(name   = flag_lower
+                                 select = "translate($flag, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')")
+                    xsl:element(name = '{$flag_field}_{$flag_lower}')
+                    {
+                        component = binary_sensor
+                        discovery_payload {
+                            device {
+                                identifiers(A)
+                                {
+                                    _ {
+                                        'wmbusmeters_'
+                                        xsl:value-of(select = $meter_id)
+                                    }
+                                }
+                                manufacturer {
+                                    xsl:value-of(select = $manufacturer)
+                                }
+                                model {
+                                    xsl:value-of(select = $mvt)
+                                }
+                                name {
+                                    xsl:value-of(select = $meter_name)
+                                }
+                                serial_number {
+                                    xsl:value-of(select = $meter_id)
+                                }
+                            }
+                            name {
+                                xsl:value-of(select = "translate($flag_lower, '_', ' ')")
+                            }
+                            unique_id {
+                                'wmbusmeters_'
+                                xsl:value-of(select = $meter_id)
+                                '_'
+                                xsl:value-of(select = $flag_field)
+                                '_'
+                                xsl:value-of(select = $flag_lower)
+                            }
+                            state_topic {
+                                'wmbusmeters/'
+                                xsl:value-of(select = $meter_name)
+                            }
+                            value_template {
+                                '{% if value_json.'
+                                xsl:value-of(select = $flag_field)
+                                ' is defined %}{{ "ON" if "'
+                                xsl:value-of(select = $flag)
+                                '" in value_json.'
+                                xsl:value-of(select = $flag_field)
+                                '.split() else "OFF" }}{% endif %}'
+                            }
+                            payload_on  = ON
+                            payload_off = OFF
+                            json_attributes_topic {
+                                'wmbusmeters/'
+                                xsl:value-of(select = $meter_name)
+                            }
+                            json_attributes_template {
+                                '{{ {"info": "'
+                                xsl:value-of(select = '.')
+                                '"} | tojson }}'
+                            }
+                            device_class       = problem
+                            entity_category    = diagnostic
+                            enabled_by_default = false
+                        }
+                    }
+                }
+            }
             // We are done with the dynamic fields, now fix the static fields.
             timestamp {
                 component = sensor
