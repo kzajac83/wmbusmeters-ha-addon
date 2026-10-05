@@ -1,3 +1,5 @@
+## 3.0.0.190 
+- kzajac83 local test: the add-on is no longer halted when the Supervisor answers slowly at startup (e.g. right after an update).
 ## 3.0.0.189 
 - kzajac83 local test: per-flag binary sensors (disabled by default), Apator driver flags from kzajac83/wmbusmeters driver-flags-apator.
 ## 3.0.0.188 
