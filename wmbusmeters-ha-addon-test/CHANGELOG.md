@@ -1,3 +1,5 @@
+## 3.0.0.201 
+- Local test in kzajac83's HA: Sample/Flags fix, per-field flag sensors, device model, startup fix, breaking change notice, Apator driver flags.
 ## 3.0.0.200 
 - Updated to version [3.0.0.200](https://github.com/wmbusmeters/wmbusmeters/commits/master)
 ## 3.0.0.197 
