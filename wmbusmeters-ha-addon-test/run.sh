@@ -76,6 +76,16 @@ fi
 
 CONFIG_DATA_PATH=$(bashio::jq "${CONFIG_PATH}" '.data_path')
 
+# The selected "MQTT discovery" mode is announced at every start, so that the
+# log shows it without opening the panel (docs: "MQTT discovery" in DOCS.md).
+MQTT_DISCOVERY_MODE="$(jq -r '.mqtt_discovery // empty' ${CONFIG_PATH} 2>/dev/null)"
+case "${MQTT_DISCOVERY_MODE}" in
+    auto)    bashio::log.info "MQTT discovery mode: auto - the generated discovery is published when the first telegram of a meter arrives";;
+    manual)  bashio::log.info "MQTT discovery mode: manual - the templates in ${CONFIG_DATA_PATH}/etc/mqtt_discovery are published at start-up";;
+    disable) bashio::log.info "MQTT discovery mode: disable - no Home Assistant entities are created or updated; the meter data is still published to MQTT";;
+    *)       bashio::log.warning "MQTT discovery mode is '${MQTT_DISCOVERY_MODE}', not one of auto, manual, disable - nothing is published";;
+esac
+
 # f21a2e3a replaced the config mapping with homeassistant_config, which mounts
 # the HA configuration at /homeassistant instead of /config. A data_path under
 # /config now points at an empty ephemeral directory, so migrate it to
@@ -248,7 +258,7 @@ EOL
     # <data path>/etc/mqtt_discovery, like the add-on did before 3.1. Only in
     # the "manual" mode, "auto" is published by send_meter_discovery.sh when a
     # telegram arrives and "disable" publishes nothing.
-    if [ "$(jq -r '.mqtt_discovery // empty' ${CONFIG_PATH} 2>/dev/null)" = "manual" ]; then
+    if [ "${MQTT_DISCOVERY_MODE}" = "manual" ]; then
         /mqtt_discovery.sh ${pub_args[@]} -c ${CONFIG_PATH} -w ${CONFIG_DATA_PATH} || true
     fi
 

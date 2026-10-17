@@ -70,8 +70,13 @@ fi
 # --- "MQTT discovery" mode in the add-on configuration (auto/manual/disable) --
 # Generating from the telegram and the driver is the "auto" mode only.
 CONFIG_PATH=/data/options_custom.json
-if [ "$(jq -r '.mqtt_discovery // empty' "$CONFIG_PATH" 2>/dev/null)" != "auto" ]; then
-    echo "metershell: MQTT discovery mode is not 'auto' in the add-on configuration, skipping generated discovery" >&2
+MODE="$(jq -r '.mqtt_discovery // empty' "$CONFIG_PATH" 2>/dev/null)"
+if [ "$MODE" != "auto" ]; then
+    case "$MODE" in
+        manual)  echo "metershell: MQTT discovery mode is 'manual': the templates were published at start-up, no generated discovery for $NAME" >&2 ;;
+        disable) echo "metershell: MQTT discovery mode is 'disable': publishing nothing for $NAME" >&2 ;;
+        *)       echo "metershell: MQTT discovery mode is '$MODE', not one of auto, manual, disable: publishing nothing for $NAME" >&2 ;;
+    esac
     exit 0
 fi
 
@@ -84,6 +89,7 @@ fi
 
 # --- Publish discovery for this driver's attributes --------------------------
 PUBLISHED=""
+COUNT=0
 for attribute in $(jq -r 'keys[]' "$DISCOVERY_FILE" 2>/dev/null)
 do
     component=$(jq -r ".${attribute}.component // empty" "$DISCOVERY_FILE" 2>/dev/null)
@@ -106,7 +112,12 @@ do
 
     "$PUB" "$topic" "$payload"
     PUBLISHED="$PUBLISHED $topic"
+    COUNT=$((COUNT + 1))
 done
+
+ENTITY="entities"
+[ "$COUNT" = "1" ] && ENTITY="entity"
+echo "metershell: MQTT discovery (auto): published $COUNT $ENTITY for $NAME ($DRIVER)" >&2
 
 # --- Remove the discovery of this meter that is not published any more -------
 # E.g. entities of fields that the driver renamed or dropped, which HA would

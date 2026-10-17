@@ -48,7 +48,10 @@ fi
 # their own templates are the point of this mode. Update a copy by deleting it
 # here and letting the next start copy the bundled version again.
 [ ! -d $CONFIG_DATA_PATH/etc/mqtt_discovery ] && mkdir -p $CONFIG_DATA_PATH/etc/mqtt_discovery
+templates_before=$(ls -1 ${CONFIG_DATA_PATH}/etc/mqtt_discovery 2>/dev/null | wc -l)
 cp -n /mqtt_discovery/* ${CONFIG_DATA_PATH}/etc/mqtt_discovery/ 2>/dev/null || true
+templates_after=$(ls -1 ${CONFIG_DATA_PATH}/etc/mqtt_discovery 2>/dev/null | wc -l)
+bashio::log.info "Templates in ${CONFIG_DATA_PATH}/etc/mqtt_discovery: ${templates_after} file(s), seeded $((templates_after - templates_before)) new."
 
 # Enumerate defined meters
 IFS=$'\n'
@@ -91,10 +94,12 @@ do
                 fi
             done
         else
-            bashio::log.info "  File $file not found."
+            bashio::log.info "  No template for meter ${aryKV['name']}: $file not found"
         fi
     fi
 done
+
+bashio::log.info "MQTT Discovery (manual): published ${#aryDiscTopic[@]} discovery entities."
 
 # Remove the retained discovery of this prefix that the templates do not
 # publish any more, so that entities of templates or meters that are gone do
