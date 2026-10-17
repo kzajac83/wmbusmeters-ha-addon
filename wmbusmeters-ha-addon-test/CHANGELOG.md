@@ -1,3 +1,5 @@
+## 3.1.0.9
+- Local HA test build on top of 3.1.0.8: builds the wmbusmeters binary from the official repository again, like the production add-on does, so the meters expose the same entities as production (the local fork build of the apatorna1 driver was missing its 8 frame_status flags).
 ## 3.1.0.8
 - Local HA test build on top of 3.1.0.7: the MQTT discovery selector names its middle option just "Automatic", like the docs do; the "(telegram + driver)" hint is gone.
 ## 3.1.0.7
