@@ -985,6 +985,21 @@ def test_channels_share_the_manual_pipeline(tmp):
         )
 
 
+def test_no_deprecated_bashio_names(tmp):
+    # bashio 0.18.0 renamed the addon.* namespace to app.*; the old names are
+    # deprecated aliases that log a warning on every call (issue #2131).
+    for addon in ADDONS:
+        for path in sorted((ROOT / addon).rglob("*.sh")):
+            check(
+                "bashio::addon." not in path.read_text(),
+                f"{addon}/{path.relative_to(ROOT / addon)} does not use the deprecated bashio::addon.* names",
+            )
+    check(
+        "bashio::app.ingress_entry" in (ROOT / TEST / "rootfs/etc/cont-init.d/nginx.sh").read_text(),
+        f"{TEST}/rootfs/etc/cont-init.d/nginx.sh uses bashio::app.ingress_entry",
+    )
+
+
 def main():
     tests = [
         test_workflows_parse_and_wiring,
@@ -1012,6 +1027,7 @@ def main():
         test_edge_discovery_mode,
         test_panel_dom_ids,
         test_channels_share_the_manual_pipeline,
+        test_no_deprecated_bashio_names,
     ]
     with tempfile.TemporaryDirectory() as tmp:
         for test in tests:
