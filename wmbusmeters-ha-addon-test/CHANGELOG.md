@@ -1,3 +1,5 @@
+## 3.1.0.7
+- Local HA test build on top of 3.1.0.6: the "Custom MQTT configuration" checkbox in the web panel now sits with its separator line at the end of its row.
 ## 3.1.0.6
 - Local HA test build on top of 3.1.0.5: the MQTT section fields in the web panel are narrower (28rem), the "Disable" discovery mode now says that the meter data is still published to MQTT, and the add-on uses the bashio::app.* names, so the bashio deprecation warning is gone (#2131).
 ## 3.1.0.5
