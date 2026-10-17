@@ -1,3 +1,5 @@
+## 3.1.0.6
+- Local HA test build on top of 3.1.0.5: the MQTT section fields in the web panel are narrower (28rem), the "Disable" discovery mode now says that the meter data is still published to MQTT, and the add-on uses the bashio::app.* names, so the bashio deprecation warning is gone (#2131).
 ## 3.1.0.5
 - Local HA test build on top of 3.1.0.4: the MQTT section fields in the web panel share one width now, and the log states the selected MQTT discovery mode at every start plus what the automatic and manual discovery published.
 ## 3.1.0.4 
