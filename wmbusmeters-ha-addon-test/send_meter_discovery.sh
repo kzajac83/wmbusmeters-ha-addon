@@ -7,8 +7,11 @@
 #
 # Extracts the driver name from the first telegram's JSON, e.g.
 #   { "driver":"amiplus", "id":"...", ... }
-# and publishes the HA MQTT discovery payload(s) from
-# /mqtt_discovery/<driver>.json - only this driver, nothing else.
+# and publishes the HA MQTT discovery payload(s) generated from that telegram
+# and the driver - only this driver, nothing else. This is the "auto" MQTT
+# discovery mode; in "manual" mode mqtt_discovery.sh publishes the templates
+# under <data path>/etc/mqtt_discovery at start-up instead, and "disable"
+# publishes nothing at all. See the "MQTT discovery" section of DOCS.md.
 #
 # Exits cleanly (0) if anything is missing, wmbusmeters must never be blocked.
 # ==============================================================================
@@ -64,10 +67,11 @@ then
     exit 0
 fi
 
-# --- "Enable mqtt discovery" in the add-on configuration (true or "true") ---
+# --- "MQTT discovery" mode in the add-on configuration (auto/manual/disable) --
+# Generating from the telegram and the driver is the "auto" mode only.
 CONFIG_PATH=/data/options_custom.json
-if [ "$(jq -r '.enable_mqtt_discovery | tostring' "$CONFIG_PATH" 2>/dev/null)" != "true" ]; then
-    echo "metershell: MQTT discovery is disabled in the add-on configuration, skipping discovery" >&2
+if [ "$(jq -r '.mqtt_discovery // empty' "$CONFIG_PATH" 2>/dev/null)" != "auto" ]; then
+    echo "metershell: MQTT discovery mode is not 'auto' in the add-on configuration, skipping generated discovery" >&2
     exit 0
 fi
 
