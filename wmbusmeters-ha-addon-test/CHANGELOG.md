@@ -1,3 +1,5 @@
+## 3.1.0.8
+- Local HA test build on top of 3.1.0.7: the MQTT discovery selector names its middle option just "Automatic", like the docs do; the "(telegram + driver)" hint is gone.
 ## 3.1.0.7
 - Local HA test build on top of 3.1.0.6: the "Custom MQTT configuration" checkbox in the web panel now sits with its separator line at the end of its row.
 ## 3.1.0.6
