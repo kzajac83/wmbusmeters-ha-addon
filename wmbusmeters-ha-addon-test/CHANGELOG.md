@@ -1,3 +1,15 @@
+## 3.1.0.10
+- Local HA test build on top of 3.1.0.9: the "MQTT discovery" setting of the add-on is now the default of every meter, and each meter can pick its own mode in the web panel (Default (the add-on setting) / Disable / Automatic / Manual). So one meter can publish the generated discovery, a second one the templates of its own file and a third nothing at all. The add-on log lists the meters that deviate from the setting, and the manual mode publishes and cleans the templates of the manual meters only.
+## 3.1.0.9
+- Local HA test build on top of 3.1.0.8: builds the wmbusmeters binary from the official repository again, like the production add-on does, so the meters expose the same entities as production (the local fork build of the apatorna1 driver was missing its 8 frame_status flags).
+## 3.1.0.8
+- Local HA test build on top of 3.1.0.7: the MQTT discovery selector names its middle option just "Automatic", like the docs do; the "(telegram + driver)" hint is gone.
+## 3.1.0.7
+- Local HA test build on top of 3.1.0.6: the "Custom MQTT configuration" checkbox in the web panel now sits with its separator line at the end of its row.
+## 3.1.0.6
+- Local HA test build on top of 3.1.0.5: the MQTT section fields in the web panel are narrower (28rem), the "Disable" discovery mode now says that the meter data is still published to MQTT, and the add-on uses the bashio::app.* names, so the bashio deprecation warning is gone (#2131).
+## 3.1.0.5
+- Local HA test build on top of 3.1.0.4: the MQTT section fields in the web panel share one width now, and the log states the selected MQTT discovery mode at every start plus what the automatic and manual discovery published.
 ## 3.1.0.4 
 - Updated to version [3.1.0.4](https://github.com/wmbusmeters/wmbusmeters/commits/master)
 ## 3.1.0.3 
