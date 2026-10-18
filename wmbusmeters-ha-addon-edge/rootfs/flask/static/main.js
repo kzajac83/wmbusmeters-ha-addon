@@ -41,7 +41,9 @@ window.addEventListener('load', () => {
             for (let i = 0; i < dataForParse[key].length; i++) {
               const keys = Object.keys(dataForParse[key][i]);
               const values = Object.values(dataForParse[key][i]);
-              renderSection(keys, values);
+              // The meter's own "MQTT discovery" mode has its own select, see
+              // renderSection.
+              renderSection(keys, values, dataForParse[key][i].mqtt_discovery || '');
             }
             break;
           case 'mqtt':
@@ -115,11 +117,44 @@ window.addEventListener('load', () => {
     renderSection();
   });
 
-  function renderSection(keys = ['name', 'driver', 'id', 'key'], values = ['', '', '', '']) {
+  // Every meter can override the add-on's "MQTT discovery" setting: the choice
+  // is stored as the meter's own "mqtt_discovery" key. run.sh keeps that key out
+  // of the wmbusmeters config, see the "MQTT discovery" section of DOCS.md.
+  function renderDiscoverySelect(mode = '') {
+    const choices = [
+      ['', 'Default (the add-on setting)'],
+      ['disable', 'Disable'],
+      ['auto', 'Automatic'],
+      ['manual', 'Manual (templates in etc/mqtt_discovery)']
+    ];
+    let known = false;
+    let options = '';
+    for (const [value, label] of choices) {
+      options += `<option value="${value}"${value === mode ? ' selected' : ''}>${label}</option>`;
+      if (value === mode) {
+        known = true;
+      }
+    }
+    if (!known) {
+      // Keep a value the add-on does not know instead of dropping it on save.
+      options += `<option value="${escapeHtml(mode)}" selected>${escapeHtml(mode)} (unknown)</option>`;
+    }
+    return `
+                <div class="input-group mb-3">
+                    <span class="input-group-text">MQTT discovery</span>
+                    <select class="meter-discovery form-select">${options}</select>
+                </div>`;
+  }
+
+  function renderSection(keys = ['name', 'driver', 'id', 'key'], values = ['', '', '', ''], mode = '') {
     const newSection = document.createElement('div');
     newSection.className = 'json-section';
     let newSectionHtml = '';
     for (let i = 0; i < keys.length; i += 1) {
+      // The per-meter "MQTT discovery" mode is the select below, not a pair.
+      if (keys[i] === 'mqtt_discovery') {
+        continue;
+      }
       newSectionHtml += `
                 <div class="json-pair input-group mb-3">
                     <input class="section-key form-control" value="${keys[i]}" type="text" required>
@@ -128,7 +163,7 @@ window.addEventListener('load', () => {
                     <button class="delete-pair btn btn-outline-danger" type="button">Delete</button>
                 </div>`;
     }
-    newSection.innerHTML = newSectionHtml + `<button class="add-pair btn btn-outline-success" type="button">Add New parameter for meter</button>
+    newSection.innerHTML = newSectionHtml + renderDiscoverySelect(mode) + `<button class="add-pair btn btn-outline-success" type="button">Add New parameter for meter</button>
                     <button class="delete-section btn btn-outline-danger" type="button">Remove meter</button><hr class="my-4">`;
     document.getElementById('sections').appendChild(newSection);
 
@@ -229,6 +264,15 @@ window.addEventListener('load', () => {
       for (let i = 0; i < sectionKeys.length; i++) {
         let value = sectionValues[i].value;
         sectionData[sectionKeys[i].value] = parseValue(value);
+      }
+      // The per-meter "MQTT discovery" choice: the empty "Default" choice means
+      // "use the add-on setting", so the key is left out then. The select wins
+      // over a "mqtt_discovery" pair that was added by hand.
+      const sectionMode = sections[i].querySelector('.meter-discovery');
+      if (sectionMode && sectionMode.value !== '') {
+        sectionData['mqtt_discovery'] = sectionMode.value;
+      } else {
+        delete sectionData['mqtt_discovery'];
       }
       sectionsData.push(sectionData)
     }

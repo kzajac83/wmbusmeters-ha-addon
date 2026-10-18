@@ -47,7 +47,7 @@ See [project README for more information][docs]
 
 #### Section: `meters`
 
-Specify your meters configuration parameters. The `driver` and `id` values can be read from the add-on logs after the initial start (with empty `meters` configuration). The `name` is your label for the meter and `key` is the encryption key to decrypt telegrams (if your meter use any).
+Specify your meters configuration parameters. The `driver` and `id` values can be read from the add-on logs after the initial start (with empty `meters` configuration). The `name` is your label for the meter and `key` is the encryption key to decrypt telegrams (if your meter use any). Every meter also has its own `MQTT discovery` choice, see the _MQTT discovery_ section below; it is stored in the meter's configuration and is never handed to wmbusmeters.
 
 See [project README for more information][docs]
 
@@ -70,7 +70,7 @@ A configuration that was written before this option existed keeps its setting: t
 
 A meter whose driver has no template gets no discovery in the manual mode; the templates of the add-on are only a starting point. Existing templates are never overwritten: the add-on copies its own templates only when the file does not exist, so your edits survive an update. To go back to the bundled version of a template, delete the file in `<data path>/etc/mqtt_discovery` and restart the add-on.
 
-The manual mode removes the retained discovery topics of this broker that the templates do not publish, so entities of deleted templates or meters do not stay in Home Assistant forever.
+The manual mode removes the retained discovery of a manual meter that the templates do not publish any more, and of a meter that is not in the configuration any more, so entities of deleted templates or meters do not stay in Home Assistant forever. The discovery of the other meters is left alone: the generated one belongs to the meter that publishes it, which cleans up its own stale entities, and a disabled meter keeps what it has.
 
 In the automatic mode:
 
@@ -80,6 +80,22 @@ In the automatic mode:
 - Entities of meters that you removed from the configuration are not removed automatically; delete them in Home Assistant.
 
 A status like `DRY ERROR_FLAGS_128` contains a bit that the driver does not describe yet (here bit value 128 of the `ERROR_FLAGS` lookup). If you know what it means for your meter, please tell the [wmbusmeters project](https://github.com/wmbusmeters/wmbusmeters/issues), so that the driver can describe it.
+
+### Every meter can choose its own mode
+
+The setting above is the default of every meter, and a meter can deviate from it. Every meter in the _Meters_ section of the configuration interface has its own `MQTT discovery` choice:
+
+- **Default (the add-on setting)**: the meter uses the setting above.
+- **Disable**, **Automatic**, **Manual**: the meter uses this mode, whatever the add-on setting is.
+
+So one meter can publish the generated discovery, a second one the templates of its own file and all the others nothing at all, e.g.:
+
+- `MainWater`: **Disable** - no entities, the meter data is published to MQTT as before.
+- `Electricity`: **Automatic** - the generated entities of the driver and the first telegram.
+- `Gas`: **Manual** - the templates in `<data path>/etc/mqtt_discovery/<driver>.json`.
+- `Heat`: **Default (the add-on setting)** - whatever the setting above is.
+
+The add-on logs the meters that deviate from the add-on setting at every start, so that the log shows the effective mode of every meter.
 
 ### Manual configuration
 

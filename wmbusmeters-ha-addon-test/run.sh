@@ -86,6 +86,21 @@ case "${MQTT_DISCOVERY_MODE}" in
     *)       bashio::log.warning "MQTT discovery mode is '${MQTT_DISCOVERY_MODE}', not one of auto, manual, disable - nothing is published";;
 esac
 
+# A meter may carry its own "mqtt_discovery" key and then ignores the add-on
+# mode above (the panel shows the choice under every meter, see DOCS.md). Log
+# the meters that deviate, so the log shows the effective mode of every meter.
+# BEGIN mqtt discovery meters
+jq -r --arg default "${MQTT_DISCOVERY_MODE}" '
+    .meters[]?
+    | select((.mqtt_discovery // "") | test("^(auto|manual|disable)$"))
+    | select(.mqtt_discovery != $default)
+    | "MQTT discovery: meter \"\(.name)\" uses \(.mqtt_discovery) (add-on default: \($default))"' \
+    ${CONFIG_PATH} 2>/dev/null | while IFS= read -r override
+do
+    [ -n "${override}" ] && bashio::log.info "${override}"
+done
+# END mqtt discovery meters
+
 # f21a2e3a replaced the config mapping with homeassistant_config, which mounts
 # the HA configuration at /homeassistant instead of /config. A data_path under
 # /config now points at an empty ephemeral directory, so migrate it to
@@ -192,6 +207,7 @@ done < $CONFIG_DATA_PATH/etc/wmbusmeters.conf > $CONFIG_DATA_PATH/etc/wmbusmeter
 mv $CONFIG_DATA_PATH/etc/wmbusmeters.conf_tmp $CONFIG_DATA_PATH/etc/wmbusmeters.conf
 # END conf split
 
+# BEGIN register meters
 bashio::log.info "Registering meters ..."
 rm -f $CONFIG_DATA_PATH/etc/wmbusmeters.d/*
 meter_no=0
@@ -201,9 +217,13 @@ do
     meter_no=$(( meter_no+1 ))
     METER_NAME=$(printf 'meter-%04d' "$(( meter_no ))")
     bashio::log.info "Adding $METER_NAME ..."
-    METER_DATA=$(printf '%s\n' $meter | jq --raw-output -c -M '.')
+    # A meter may carry the add-on's own "mqtt_discovery" key (its own MQTT
+    # discovery mode, see DOCS.md). wmbusmeters does not know the key, so it is
+    # dropped from the meter file here.
+    METER_DATA=$(printf '%s\n' $meter | jq --raw-output -c -M 'del(.mqtt_discovery)')
     echo -e "$METER_DATA" | jq -r 'to_entries|map("\(.key)=\(.value|tostring)")|.[]' > $CONFIG_DATA_PATH/etc/wmbusmeters.d/$METER_NAME
 done
+# END register meters
 
 bashio::log.info "Generating MQTT configuration ... "
 if bashio::jq.exists "${CONFIG_PATH}" ".mqtt.server"
@@ -255,12 +275,16 @@ EOL
     chmod a+x /wmbusmeters/mosquitto_retained.sh
 
     # Manual MQTT discovery: publish the templates in
-    # <data path>/etc/mqtt_discovery, like the add-on did before 3.1. Only in
-    # the "manual" mode, "auto" is published by send_meter_discovery.sh when a
-    # telegram arrives and "disable" publishes nothing.
-    if [ "${MQTT_DISCOVERY_MODE}" = "manual" ]; then
+    # <data path>/etc/mqtt_discovery for the meters whose mode is manual - the
+    # add-on mode above or the meter's own "mqtt_discovery" key. "auto" is
+    # published by send_meter_discovery.sh when a telegram arrives and
+    # "disable" publishes nothing.
+    # BEGIN manual discovery call
+    MANUAL_METERS=$(jq -r '[.meters[]? | select((.mqtt_discovery // "") == "manual")] | length' ${CONFIG_PATH} 2>/dev/null)
+    if [ "${MQTT_DISCOVERY_MODE}" = "manual" ] || [ "${MANUAL_METERS:-0}" != "0" ]; then
         /mqtt_discovery.sh ${pub_args[@]} -c ${CONFIG_PATH} -w ${CONFIG_DATA_PATH} || true
     fi
+    # END manual discovery call
 
 fi
 

@@ -796,9 +796,14 @@ def _check_mode_wiring(addon, default_mode):
         0 < mode_check < send_text.find("PUB=/wmbusmeters/mosquitto_pub.sh"),
         f"{addon}/send_meter_discovery.sh checks the mqtt_discovery mode before publishing",
     )
+    mode_block = send_text.find("# BEGIN discovery mode")
     check(
-        '!= "auto"' in send_text[mode_check : mode_check + 200],
+        mode_block > 0 and '!= "auto"' in send_text[mode_block : mode_block + 900],
         f"{addon}/send_meter_discovery.sh publishes the generated discovery in the auto mode only",
+    )
+    check(
+        re.search(r"\.meters\[\]\?.*\.mqtt_discovery", send_text) is not None,
+        f"{addon}/send_meter_discovery.sh reads the meter's own mqtt_discovery key",
     )
     check(
         ".enable_mqtt_discovery" not in send_text,
@@ -822,13 +827,13 @@ def _check_mode_wiring(addon, default_mode):
     if check(manual_call > 0, f"{addon}/run.sh calls mqtt_discovery.sh (manual mode)"):
         check(
             '= "manual"' in run_text[max(0, manual_call - 300) : manual_call],
-            f"{addon}/run.sh calls mqtt_discovery.sh in the manual mode only",
+            f"{addon}/run.sh calls mqtt_discovery.sh for the manual mode (add-on setting or a meter)",
         )
 
     script = (ROOT / addon / "mqtt_discovery.sh").read_text()
     check(
-        '!= "manual"' in script and ".mqtt_discovery" in script,
-        f"{addon}/mqtt_discovery.sh publishes only in the manual mode",
+        '!= "manual"' in script and ".mqtt_discovery" in script and "effective_mode" in script,
+        f"{addon}/mqtt_discovery.sh publishes only for the meters whose mode is manual",
     )
     check(
         "cp -n /mqtt_discovery/*" in script,
@@ -958,7 +963,8 @@ def test_channels_share_the_manual_pipeline(tmp):
     """weetmuts asked for edge and test at the same time (#2138): the manual
     pipeline and the panel must be the same in both channels, only the default
     mode and the migration differ."""
-    for rel in ("mqtt_discovery.sh", "rootfs/flask/templates/index.html",
+    for rel in ("mqtt_discovery.sh", "send_meter_discovery.sh",
+                "rootfs/flask/templates/index.html",
                 "rootfs/flask/static/main.js"):
         edge = (ROOT / EDGE / rel).read_text()
         test = (ROOT / TEST / rel).read_text()
@@ -982,6 +988,346 @@ def test_channels_share_the_manual_pipeline(tmp):
         check(
             "'mqtt_discovery': mqtt_discovery" in js and "getElementById('mqtt-discovery')" in js,
             f"{addon} panel saves the mqtt_discovery mode",
+        )
+
+
+def _marked_block(addon, rel, begin, end):
+    """The code of a script between its begin/end markers, or None."""
+    text = (ROOT / addon / rel).read_text()
+    if not check(
+        text.count(begin) == 1 and text.count(end) == 1,
+        f"{addon}/{rel} marks {begin!r}",
+    ):
+        return None
+    return text.split(begin, 1)[1].split(end, 1)[0]
+
+
+def test_meter_mode_is_not_handed_to_wmbusmeters(tmp):
+    """A meter's own "mqtt_discovery" key is the add-on's, not wmbusmeters':
+    run.sh drops it when it writes the wmbusmeters meter file (wmbusmeters only
+    warns about a key it does not know, but the key is not a meter setting)."""
+    meters = [
+        {"name": "MainWater", "driver": "hydrus", "id": "04913581", "key": "0" * 32},
+        {"name": "Gas", "driver": "amiplus", "id": "12345678", "mqtt_discovery": "manual"},
+    ]
+    for addon in (EDGE, TEST):
+        block = _marked_block(addon, "run.sh", "# BEGIN register meters", "# END register meters")
+        if block is None:
+            return
+        ws = Path(tmp) / f"meter_key_{addon.replace('wmbusmeters-ha-addon-', '')}"
+        (ws / "data" / "etc" / "wmbusmeters.d").mkdir(parents=True)
+        cfg = ws / "data" / "options_custom.json"
+        cfg.write_text(json.dumps({"mqtt_discovery": "auto", "meters": meters}, indent=True) + "\n")
+        sim = (
+            'bashio::log.info() { echo "INFO: $*"; }\n'
+            f"CONFIG_PATH={cfg}\n"
+            f"CONFIG_DATA_PATH={ws}/data\n"
+            + block
+        )
+        proc = subprocess.run(["bash", "-c", sim], capture_output=True, text=True, timeout=30)
+        if not check(proc.returncode == 0, f"{addon} register meters exits 0 ({proc.stderr.strip()[:200]})"):
+            continue
+        files = sorted((ws / "data" / "etc" / "wmbusmeters.d").glob("meter-*"))
+        if not check(len(files) == len(meters), f"{addon} register meters writes one file per meter (got {len(files)})"):
+            continue
+        written = "\n".join(f.read_text() for f in files)
+        check(
+            "mqtt_discovery" not in written,
+            f"{addon} register meters keeps the add-on key out of the wmbusmeters meter files",
+        )
+        check(
+            "name=MainWater" in written and "driver=amiplus" in written and "driver=hydrus" in written,
+            f"{addon} register meters writes the name and driver of every meter",
+        )
+
+
+def test_meter_modes_are_logged(tmp):
+    """The start-up log shows the effective mode of every meter: the meters that
+    deviate from the add-on setting are listed, the others and unknown values
+    are not."""
+    for addon in (EDGE, TEST):
+        block = _marked_block(addon, "run.sh", "# BEGIN mqtt discovery meters", "# END mqtt discovery meters")
+        if block is None:
+            return
+        ws = Path(tmp) / f"meter_log_{addon.replace('wmbusmeters-ha-addon-', '')}"
+        ws.mkdir(parents=True)
+        cfg = ws / "options_custom.json"
+        cfg.write_text(json.dumps({"mqtt_discovery": "auto", "meters": [
+            {"name": "MainWater", "driver": "hydrus", "id": "04913581"},
+            {"name": "Gas", "driver": "amiplus", "id": "12345678", "mqtt_discovery": "manual"},
+            {"name": "Heat", "driver": "hydrus", "id": "87654321", "mqtt_discovery": "disable"},
+            {"name": "Elec", "driver": "amiplus", "id": "11112222", "mqtt_discovery": "Disabled"},
+        ]}, indent=True) + "\n")
+        sim = (
+            'bashio::log.info() { echo "INFO: $*"; }\n'
+            "MQTT_DISCOVERY_MODE=auto\n"
+            f"CONFIG_PATH={cfg}\n"
+            + block
+        )
+        proc = subprocess.run(["bash", "-c", sim], capture_output=True, text=True, timeout=30)
+        if not check(proc.returncode == 0, f"{addon} meter mode log exits 0 ({proc.stderr.strip()[:200]})"):
+            continue
+        out = proc.stdout.strip()
+        check(
+            'meter "Gas" uses manual' in out and 'meter "Heat" uses disable' in out,
+            f"{addon} logs the meters that deviate from the add-on setting (got {out!r})",
+        )
+        check(
+            "MainWater" not in out and "Elec" not in out,
+            f"{addon} does not log meters that use the add-on setting or an unknown mode (got {out!r})",
+        )
+        check(
+            "add-on default: auto" in out,
+            f"{addon} names the add-on setting in the per-meter log line (got {out!r})",
+        )
+
+
+def test_manual_pipeline_is_called_for_a_meter(tmp):
+    """run.sh starts the manual pipeline when the add-on setting is manual or a
+    meter has its own "manual" mode, and leaves it alone otherwise."""
+    cases = [
+        ("add-on auto, no meter mode", "auto", [{"name": "A"}], False),
+        ("add-on auto, one manual meter", "auto", [{"name": "A"}, {"name": "B", "mqtt_discovery": "manual"}], True),
+        ("add-on disable, one manual meter", "disable", [{"name": "A", "mqtt_discovery": "manual"}], True),
+        ("add-on disable, every meter disabled", "disable", [{"name": "A", "mqtt_discovery": "disable"}], False),
+        ("add-on manual, no meter mode", "manual", [{"name": "A"}], True),
+        ("add-on manual, meter generates its own", "manual", [{"name": "A", "mqtt_discovery": "auto"}], True),
+    ]
+    for addon in (EDGE, TEST):
+        block = _marked_block(addon, "run.sh", "# BEGIN manual discovery call", "# END manual discovery call")
+        if block is None:
+            return
+        for label, mode, meters, expected in cases:
+            ws = Path(tmp) / f"manual_call_{addon.replace('wmbusmeters-ha-addon-', '')}_{label.replace(' ', '_')}"
+            (ws / "data").mkdir(parents=True)
+            cfg = ws / "options_custom.json"
+            cfg.write_text(json.dumps({"mqtt_discovery": mode, "meters": meters}, indent=True) + "\n")
+            stub = ws / "mqtt_discovery.sh"
+            stub.write_text(f'#!/bin/bash\necho called > {ws}/called\n')
+            stub.chmod(0o755)
+            sim = (
+                f"MQTT_DISCOVERY_MODE={mode}\n"
+                f"CONFIG_PATH={cfg}\n"
+                f"CONFIG_DATA_PATH={ws}/data\n"
+                "pub_args=()\n"
+                + block.replace("/mqtt_discovery.sh", str(stub))
+            )
+            proc = subprocess.run(["bash", "-c", sim], capture_output=True, text=True, timeout=30)
+            check(proc.returncode == 0, f"{addon} manual call '{label}' exits 0 ({proc.stderr.strip()[:200]})")
+            called = (ws / "called").exists()
+            check(
+                called == expected,
+                f"{addon} manual call '{label}': {'called' if expected else 'not called'} (got {called})",
+            )
+
+
+def test_hook_honours_the_meter_mode(tmp):
+    """send_meter_discovery.sh publishes the generated discovery for the meters
+    whose mode is auto; the meter's own key wins over the add-on setting and an
+    unknown value falls back to it."""
+    cases = [
+        # label, add-on setting, meter key, expected message, expected source
+        ("meter uses the add-on auto", "auto", None, None, None),
+        ("meter auto next to an add-on disable", "disable", "auto", None, None),
+        ("meter manual", "auto", "manual", "'manual'", "the setting of the meter"),
+        ("meter disable", "auto", "disable", "'disable'", "the setting of the meter"),
+        ("meter auto wins over an add-on manual", "manual", "auto", None, None),
+        ("unknown value falls back to the add-on auto", "auto", "Disabled", None, None),
+        ("unknown value falls back to an add-on disable", "disable", "Disabled", "'disable'", "the add-on setting"),
+    ]
+    for addon in (EDGE, TEST):
+        block = _marked_block(addon, "send_meter_discovery.sh", "# BEGIN discovery mode", "# END discovery mode")
+        if block is None:
+            return
+        for label, default, own, message, source in cases:
+            ws = Path(tmp) / f"hook_mode_{addon.replace('wmbusmeters-ha-addon-', '')}_{label.replace(' ', '_')}"
+            (ws / "data").mkdir(parents=True)
+            meter = {"name": "Gas", "driver": "amiplus", "id": "12345678"}
+            if own is not None:
+                meter["mqtt_discovery"] = own
+            cfg = ws / "data" / "options_custom.json"
+            cfg.write_text(json.dumps({"mqtt_discovery": default, "meters": [meter]}, indent=True) + "\n")
+            sim = (
+                "NAME=Gas\nID=12345678\n"
+                + block.replace("/data/options_custom.json", str(cfg))
+            )
+            proc = subprocess.run(["bash", "-c", sim], capture_output=True, text=True, timeout=30)
+            check(proc.returncode == 0, f"{addon} hook mode '{label}' exits 0 ({proc.stderr.strip()[:200]})")
+            if message is None:
+                check(
+                    "metershell:" not in proc.stderr,
+                    f"{addon} hook mode '{label}' publishes without a mode message (got {proc.stderr.strip()!r})",
+                )
+            else:
+                check(
+                    message in proc.stderr and source in proc.stderr,
+                    f"{addon} hook mode '{label}' logs {message} from {source!r} (got {proc.stderr.strip()!r})",
+                )
+
+
+def _manual_pipeline_case(tmp, addon, label, config, templates, retained):
+    """Run the real mqtt_discovery.sh with stubbed broker binaries, one template
+    file per driver and a fixed list of retained topics."""
+    script = (ROOT / addon / "mqtt_discovery.sh").read_text()
+    ws = Path(tmp) / f"pipeline_{addon.replace('wmbusmeters-ha-addon-', '')}_{label.replace(' ', '_')}"
+    (ws / "data" / "etc").mkdir(parents=True)
+    seed = ws / "seed"
+    seed.mkdir()
+    for driver, body in templates.items():
+        (seed / f"{driver}.json").write_text(json.dumps(body))
+    cfg = ws / "options_custom.json"
+    cfg.write_text(json.dumps(config, indent=True) + "\n")
+    log = ws / "broker.log"
+    pub = ws / "mosquitto_pub"
+    pub.write_text(f'#!/bin/bash\necho "PUB $*" >> {log}\n')
+    sub = ws / "mosquitto_sub"
+    sub.write_text("#!/bin/bash\n" + "".join(f'echo "{topic}"\n' for topic in retained))
+    for binary in (pub, sub):
+        binary.chmod(0o755)
+    runner = ws / "mqtt_discovery.sh"
+    runner.write_text(
+        'bashio::log.info() { echo "INFO: $*"; }\n'
+        'bashio::log.warning() { echo "WARN: $*"; }\n'
+        'bashio::log.error() { echo "ERROR: $*"; }\n'
+        "bashio::services.available() { return 1; }\n"
+        "bashio::services() { echo null; }\n"
+        + script.replace("/usr/bin/mosquitto_pub", str(pub))
+                .replace("/usr/bin/mosquitto_sub", str(sub))
+                .replace("cp -n /mqtt_discovery/*", f"cp -n {seed}/*")
+                .replace("-p /dev/shm/", "")
+    )
+    proc = subprocess.run(
+        ["bash", str(runner), "-c", str(cfg), "-w", str(ws / "data")],
+        capture_output=True, text=True, timeout=60,
+    )
+    published, removed = set(), set()
+    if log.exists():
+        for line in log.read_text().splitlines():
+            args = line.split()
+            if not args or args[0] != "PUB":
+                continue
+            topic = args[args.index("-t") + 1]
+            (removed if "-n" in args else published).add(topic)
+    return proc, published, removed
+
+
+def test_manual_pipeline_publishes_for_manual_meters_only(tmp):
+    """With a per-meter mode the manual pipeline publishes for the meters whose
+    mode is manual only, and it removes only their retained discovery plus what
+    a meter that is gone left behind: what an "auto" meter generates and what a
+    "disable"d meter has must survive."""
+    template = {
+        "total_m3": {
+            "component": "sensor",
+            "discovery_payload": {
+                "name": "{name} total",
+                "state_topic": "wmbusmeters/{name}",
+                "unique_id": "{id}_total_m3",
+            },
+        },
+    }
+    templates = {"hydrus": template, "amiplus": template}
+    cases = [
+        (
+            "one manual meter next to auto and disable meters",
+            {
+                "mqtt_discovery": "auto",
+                "meters": [
+                    {"name": "MainWater", "driver": "hydrus", "id": "04913581"},
+                    {"name": "Gas", "driver": "amiplus", "id": "12345678", "mqtt_discovery": "manual"},
+                    {"name": "Heat", "driver": "hydrus", "id": "87654321", "mqtt_discovery": "disable"},
+                    # manual, but its driver has no template
+                    {"name": "Elec", "driver": "lansen", "id": "11112222", "mqtt_discovery": "manual"},
+                ],
+            },
+            [
+                "homeassistant/sensor/wmbusmeters/12345678_total_m3/config",
+                "homeassistant/sensor/wmbusmeters/12345678_status_GONE/config",
+                "homeassistant/sensor/wmbusmeters/04913581_total_m3/config",
+                "homeassistant/sensor/wmbusmeters/87654321_total_m3/config",
+                "homeassistant/sensor/wmbusmeters/11112222_total_m3/config",
+                # a meter that is not in the configuration any more
+                "homeassistant/sensor/wmbusmeters/99999999_total_m3/config",
+            ],
+            {"homeassistant/sensor/wmbusmeters/12345678_total_m3/config"},
+            {
+                "homeassistant/sensor/wmbusmeters/12345678_status_GONE/config",
+                "homeassistant/sensor/wmbusmeters/11112222_total_m3/config",
+                "homeassistant/sensor/wmbusmeters/99999999_total_m3/config",
+            },
+            ["Skipping meter MainWater", "Skipping meter Heat", "No template for meter Elec"],
+        ),
+        (
+            "the add-on setting is manual, one meter generates its own",
+            {
+                "mqtt_discovery": "manual",
+                "meters": [
+                    {"name": "A", "driver": "hydrus", "id": "11111111", "mqtt_discovery": "auto"},
+                    {"name": "B", "driver": "hydrus", "id": "22222222"},
+                ],
+            },
+            [
+                "homeassistant/sensor/wmbusmeters/11111111_total_m3/config",
+                "homeassistant/sensor/wmbusmeters/22222222_total_m3/config",
+                "homeassistant/sensor/wmbusmeters/22222222_status_GONE/config",
+            ],
+            {"homeassistant/sensor/wmbusmeters/22222222_total_m3/config"},
+            {"homeassistant/sensor/wmbusmeters/22222222_status_GONE/config"},
+            ["Skipping meter A"],
+        ),
+    ]
+    for addon in (EDGE, TEST):
+        for label, config, retained, expected_published, expected_removed, expected_log in cases:
+            proc, published, removed = _manual_pipeline_case(tmp, addon, label, config, templates, retained)
+            if not check(
+                proc.returncode == 0,
+                f"{addon} manual pipeline '{label}' exits 0 ({proc.stderr.strip()[:200]})",
+            ):
+                continue
+            check(
+                published == expected_published,
+                f"{addon} manual pipeline '{label}' publishes for the manual meters only (got {sorted(published)})",
+            )
+            check(
+                removed == expected_removed,
+                f"{addon} manual pipeline '{label}' removes only the retained discovery of the manual meters (got {sorted(removed)})",
+            )
+            for line in expected_log:
+                check(
+                    line in proc.stdout,
+                    f"{addon} manual pipeline '{label}' logs {line!r} (got {proc.stdout.strip()!r})",
+                )
+
+
+def test_panel_offers_the_meter_mode(tmp):
+    """Every meter row of the panel has its own MQTT discovery choice; the
+    "Default" choice keeps the meter key out of the saved configuration."""
+    for addon in (EDGE, TEST):
+        js = (ROOT / addon / "rootfs/flask/static/main.js").read_text()
+        check(
+            "renderDiscoverySelect" in js and "meter-discovery" in js,
+            f"{addon} panel renders a per-meter MQTT discovery choice",
+        )
+        check(
+            "sectionData['mqtt_discovery'] = sectionMode.value" in js,
+            f"{addon} panel saves the per-meter mode",
+        )
+        check(
+            "delete sectionData['mqtt_discovery']" in js,
+            f"{addon} panel drops the meter key when the choice is 'Default'",
+        )
+        check(
+            "keys[i] === 'mqtt_discovery'" in js,
+            f"{addon} panel shows the meter mode once, not as a key/value pair",
+        )
+        check(
+            "dataForParse[key][i].mqtt_discovery || ''" in js,
+            f"{addon} panel shows the saved per-meter mode",
+        )
+        docs = (ROOT / addon / "DOCS.md").read_text()
+        check(
+            "Every meter can choose its own mode" in docs and "Default (the add-on setting)" in docs,
+            f"{addon}/DOCS.md documents the per-meter MQTT discovery mode",
         )
 
 
@@ -1027,6 +1373,12 @@ def main():
         test_edge_discovery_mode,
         test_panel_dom_ids,
         test_channels_share_the_manual_pipeline,
+        test_meter_mode_is_not_handed_to_wmbusmeters,
+        test_meter_modes_are_logged,
+        test_manual_pipeline_is_called_for_a_meter,
+        test_hook_honours_the_meter_mode,
+        test_manual_pipeline_publishes_for_manual_meters_only,
+        test_panel_offers_the_meter_mode,
         test_no_deprecated_bashio_names,
     ]
     with tempfile.TemporaryDirectory() as tmp:
