@@ -796,8 +796,10 @@ def test_test_conf_split(tmp, TEST=TEST):
 
 def test_test_discovery_cleanup(tmp, TEST=TEST):
     """After publishing the discovery of a meter, send_meter_discovery.sh removes the
-    retained discovery of the same meter that was not published now (renamed or
-    dropped fields), and leaves other meters alone."""
+    retained discovery of the same meter for fields that the driver does not define
+    any more (renamed or dropped fields), and leaves other meters alone. A field that
+    the driver defines but this telegram does not carry stays: a meter can send
+    several telegram formats (wmbusmeters#2161, wmbusmeters#2163)."""
     run_text = (ROOT / TEST / "run.sh").read_text()
     check(
         "--retained-only" in run_text and "-r -t \"\\$2\" -n" in run_text,
@@ -810,30 +812,90 @@ def test_test_discovery_cleanup(tmp, TEST=TEST):
     ):
         return
     block = send_text.split("# BEGIN discovery cleanup", 1)[1].split("# END discovery cleanup", 1)[0]
-    ws = Path(tmp) / "discovery_cleanup"
-    ws.mkdir(parents=True)
-    keep = "homeassistant/sensor/wmbusmeters/04913581_total_m3/config"
-    stale = "homeassistant/binary_sensor/wmbusmeters/04913581_status_LOW_BATTERY/config"
-    similar_id = "homeassistant/sensor/wmbusmeters/049135810_total_m3/config"
-    other_meter = "homeassistant/sensor/wmbusmeters/12345678_status_LOW_BATTERY/config"
-    helper = ws / "retained.sh"
-    helper.write_text(
-        "#!/bin/bash\n"
-        f'if [ "$1" = list ]; then printf "%s\\n" {keep} {stale} {similar_id} {other_meter}; fi\n'
-        f'if [ "$1" = clear ]; then echo "$2" >> {ws}/cleared; fi\n'
-    )
-    helper.chmod(0o755)
-    sim = (
-        f"ID=04913581\nPUBLISHED=' {keep} homeassistant/binary_sensor/wmbusmeters/04913581_status/config'\n"
-        + block.replace("/wmbusmeters/mosquitto_retained.sh", str(helper))
-    )
-    proc = subprocess.run(["bash", "-c", sim], capture_output=True, text=True, timeout=30)
-    check(proc.returncode == 0, f"discovery cleanup exits 0 ({proc.stderr.strip()[:200]})")
-    cleared = (ws / "cleared").read_text().split() if (ws / "cleared").exists() else []
-    check(
-        cleared == [stale],
-        f"discovery cleanup removes only the stale topic of this meter (got {cleared!r})",
-    )
+
+    def topic(attribute, component="sensor", meter="04913581"):
+        return f"homeassistant/{component}/wmbusmeters/{meter}_{attribute}/config"
+
+    # What "wmbusmeters --listfields=<driver>" prints: the name, then the description.
+    fields = [
+        "id", "name", "media", "meter", "timestamp", "timestamp_ut", "timestamp_lt",
+        "timestamp_utc", "device", "rssi_dbm", "total_m3", "status",
+        "current_consumption_hca", "set_date_{storage_counter}",
+        "consumption_at_set_date_{storage_counter}_hca", "device_datetime",
+    ]
+    published = [topic("total_m3"), topic("status", "binary_sensor")]
+    cases = [
+        # label, listed fields, retained topics, expected cleared
+        (
+            "stale flag of the old edge",
+            fields,
+            published + [
+                topic("status_LOW_BATTERY", "binary_sensor"),
+                topic("total_m3", meter="049135810"),
+                topic("status_LOW_BATTERY", "binary_sensor", meter="12345678"),
+            ],
+            [topic("status_LOW_BATTERY", "binary_sensor")],
+        ),
+        (
+            "another telegram format",
+            fields,
+            published + [
+                topic("current_consumption_hca"),
+                topic("consumption_at_set_date_8_hca"),
+                topic("set_date_8"),
+                topic("status_text"),
+                topic("status_low_battery", "binary_sensor"),
+            ],
+            [],
+        ),
+        (
+            "renamed field",
+            fields,
+            published + [topic("device_date_time"), topic("total_volume_m3")],
+            [topic("device_date_time"), topic("total_volume_m3")],
+        ),
+        (
+            "unknown driver",
+            [],
+            published + [topic("device_date_time")],
+            [],
+        ),
+    ]
+    for label, listed, retained, expected in cases:
+        ws = Path(tmp) / f"discovery_cleanup_{TEST}_{label.replace(' ', '_')}"
+        ws.mkdir(parents=True)
+        helper = ws / "retained.sh"
+        helper.write_text(
+            "#!/bin/bash\n"
+            f'if [ "$1" = list ]; then printf "%s\\n" {" ".join(retained)}; fi\n'
+            f'if [ "$1" = clear ]; then echo "$2" >> {ws}/cleared; fi\n'
+        )
+        helper.chmod(0o755)
+        lister = ws / "wmbusmeters"
+        lister.write_text(
+            "#!/bin/bash\n"
+            f'[ "$1" = "--listfields=qcaloric" ] || exit 1\n'
+            + "".join(f'printf "%40s  %s\\n" "{f}" "Description of {f}."\n' for f in listed)
+        )
+        lister.chmod(0o755)
+        sim = (
+            f"ID=04913581\nNAME=HCA\nDRIVER=qcaloric\nPUBLISHED=' {' '.join(published)}'\n"
+            + block.replace("/wmbusmeters/mosquitto_retained.sh", str(helper)).replace(
+                "/wmbusmeters/wmbusmeters", str(lister)
+            )
+        )
+        proc = subprocess.run(["bash", "-c", sim], capture_output=True, text=True, timeout=30)
+        check(proc.returncode == 0, f"{TEST} discovery cleanup '{label}' exits 0 ({proc.stderr.strip()[:200]})")
+        cleared = (ws / "cleared").read_text().split() if (ws / "cleared").exists() else []
+        check(
+            sorted(cleared) == sorted(expected),
+            f"{TEST} discovery cleanup '{label}' removes {expected!r} (got {cleared!r})",
+        )
+        if label == "unknown driver":
+            check(
+                "keeping all discovery" in proc.stderr,
+                f"{TEST} discovery cleanup '{label}' logs that nothing is removed",
+            )
 
 
 def _mode_migration_block(run_text, addon):

@@ -75,7 +75,8 @@ The manual mode removes the retained discovery of a manual meter that the templa
 In the automatic mode:
 
 - Status fields get a problem sensor, a text sensor with the status text, and one binary sensor per flag the driver knows. The flag sensors are disabled by default: enable the ones that matter to you. Their `info` attribute describes the flag.
-- Discovery that is no longer published for a meter, e.g. for a field that a driver renamed, is removed when the meter's discovery is sent.
+- A meter that sends several telegram formats gets the entities of every format: the discovery is sent again when a telegram brings fields the meter has not sent before. An entity is not removed because a telegram does not carry its field.
+- Discovery of a field that the driver does not define any more, e.g. a field that the driver renamed, is removed when the meter's discovery is sent.
 - A meter that uses a deprecated driver gets a "driver (deprecated, use ... before ...)" entity. Change `driver=` of the meter to the driver it names.
 - Entities of meters that you removed from the configuration are not removed automatically; delete them in Home Assistant.
 

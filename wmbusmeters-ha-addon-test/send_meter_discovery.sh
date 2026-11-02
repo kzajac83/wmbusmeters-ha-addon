@@ -1,7 +1,8 @@
 #!/bin/bash
 # ==============================================================================
 # Invoked by wmbusmeters via the "metershell" config when the FIRST telegram
-# from a meter arrives.
+# from a meter arrives, and again when a later telegram brings fields that the
+# meter has not sent before (a meter can send several telegram formats).
 #
 #   wmbusmeters.conf: metershell=send_meter_discovery.sh "$METER_JSON" "$METER_DRIVER"
 #
@@ -134,26 +135,50 @@ ENTITY="entities"
 [ "$COUNT" = "1" ] && ENTITY="entity"
 echo "metershell: MQTT discovery (auto): published $COUNT $ENTITY for $NAME ($DRIVER)" >&2
 
-# --- Remove the discovery of this meter that is not published any more -------
+# --- Remove the discovery of fields that the driver does not define any more --
 # E.g. entities of fields that the driver renamed or dropped, which HA would
-# otherwise keep as unavailable entities forever.
+# otherwise keep as unavailable entities forever. A field that is only missing
+# from this telegram stays: a meter can send several telegram formats, and the
+# discovery of a format that did not arrive yet must survive a restart
+# (wmbusmeters#2161, wmbusmeters#2163).
 # BEGIN discovery cleanup
 RETAINED=/wmbusmeters/mosquitto_retained.sh
+WMBUSMETERS=/wmbusmeters/wmbusmeters
 if [ -x "$RETAINED" ] && [ -n "$PUBLISHED" ]; then
-    for old in $("$RETAINED" list "homeassistant/+/wmbusmeters/+/config" 2>/dev/null)
-    do
-        case "$old" in
-            */wmbusmeters/"${ID}"_*/config) ;;
-            *) continue ;;
-        esac
-        case " $PUBLISHED " in
-            *" $old "*) ;;
-            *)
-                echo "metershell: removing discovery that is not published any more: $old" >&2
-                "$RETAINED" clear "$old"
-                ;;
-        esac
-    done
+    # The fields the driver can print, from wmbusmeters itself. A name like
+    # set_date_{storage_counter} stands for set_date_1, set_date_2 ...
+    FIELDS=$("$WMBUSMETERS" --listfields="$DRIVER" 2>/dev/null | awk '{print $1}' | grep -E '^[a-z0-9_{}]+$')
+    if [ -z "$FIELDS" ]; then
+        echo "metershell: the fields of driver $DRIVER are not known, keeping all discovery of $NAME" >&2
+    else
+        EXACT=$(printf '%s\n' $FIELDS | sed 's/{[^}]*}/[0-9]+/g' | paste -sd '|')
+        # Entities derived from a field are named <field>_text and <field>_<flag>,
+        # in lower case. Not for the fields that every meter has: device_date_time
+        # is not derived from device.
+        PREFIX=$(printf '%s\n' $FIELDS | grep -v -x -E 'id|name|media|meter|device|rssi_dbm|timestamp(_[a-z]+)?' | sed 's/{[^}]*}/[0-9]+/g' | paste -sd '|')
+        KEPT=0
+        for old in $("$RETAINED" list "homeassistant/+/wmbusmeters/+/config" 2>/dev/null)
+        do
+            case "$old" in
+                */wmbusmeters/"${ID}"_*/config) ;;
+                *) continue ;;
+            esac
+            case " $PUBLISHED " in
+                *" $old "*) continue ;;
+            esac
+            attribute="${old#*/wmbusmeters/"${ID}"_}"
+            attribute="${attribute%/config}"
+            if [[ "$attribute" =~ ^(${EXACT})$ ]] || { [ -n "$PREFIX" ] && [[ "$attribute" =~ ^(${PREFIX})_[a-z0-9_]+$ ]]; }; then
+                KEPT=$((KEPT + 1))
+                continue
+            fi
+            echo "metershell: removing discovery of a field that driver $DRIVER does not define: $old" >&2
+            "$RETAINED" clear "$old"
+        done
+        if [ "$KEPT" -gt 0 ]; then
+            echo "metershell: keeping $KEPT discovery of $NAME for fields of $DRIVER that this telegram does not carry" >&2
+        fi
+    fi
 fi
 # END discovery cleanup
 
