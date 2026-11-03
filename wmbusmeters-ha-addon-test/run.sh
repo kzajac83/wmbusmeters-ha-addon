@@ -307,6 +307,19 @@ esac
 EOL
     chmod a+x /wmbusmeters/mosquitto_retained.sh
 
+    # Used by the panel to apply a manual configuration: many topics in one start
+    # of the helper instead of one start per topic.
+    cat > /wmbusmeters/mosquitto_batch.sh << EOL
+#!/usr/bin/with-contenv bashio
+# publish <file>: every line "<topic><TAB><payload>" is published retained
+# clear <file>: every line is a topic whose retained message is removed
+case "\$1" in
+    publish) while IFS=\$'\t' read -r topic payload; do /usr/bin/mosquitto_pub ${pub_args_quoted[@]} -r -t "\$topic" -m "\$payload" || exit 1; done < "\$2" ;;
+    clear)   while read -r topic; do /usr/bin/mosquitto_pub ${pub_args_quoted[@]} -r -t "\$topic" -n; done < "\$2" ;;
+esac
+EOL
+    chmod a+x /wmbusmeters/mosquitto_batch.sh
+
     # HA's discovery prefix, for the manual discovery that the panel applies.
     MQTT_DISCOVERY_PREFIX="homeassistant"
     if bashio::services.available "mqtt"; then

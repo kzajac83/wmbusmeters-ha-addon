@@ -7,6 +7,7 @@ from io import BytesIO
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 import discovery_files
+import tempfile
 
 app = Flask(__name__, static_url_path='')
 
@@ -275,7 +276,7 @@ def check_filename():
 # mqtt_discovery.sh publishes the applied configuration again at every start.
 # See discovery_files.py and the "MQTT discovery" section of DOCS.md.
 
-MQTT_PUB = '/wmbusmeters/mosquitto_pub.sh'
+MQTT_BATCH = '/wmbusmeters/mosquitto_batch.sh'
 MQTT_RETAINED = '/wmbusmeters/mosquitto_retained.sh'
 DISCOVERY_PREFIX_FILE = '/wmbusmeters/discovery_prefix'
 
@@ -419,7 +420,7 @@ def discovery_apply(meter_id):
     problems = discovery_files.validate(draft)
     if problems:
         return jsonify({'error': 'The draft cannot be applied, nothing was changed.', 'problems': problems}), 400
-    if not os.access(MQTT_PUB, os.X_OK):
+    if not os.access(MQTT_BATCH, os.X_OK):
         return jsonify({'error': 'No MQTT broker is configured, nothing was changed.'}), 503
     prefix = discovery_prefix()
     try:
@@ -429,15 +430,28 @@ def discovery_apply(meter_id):
     new_topics = discovery_files.topics(draft, meter_id, meter.get('name', ''),
                                         discovery_files.driver_name(meter), prefix)
     # Publish first; remove only when everything is published, so that a failure
-    # leaves the meter with its old entities rather than with none.
-    for topic, payload in new_topics.items():
-        out = subprocess.run([MQTT_PUB, topic, payload], capture_output=True, text=True, timeout=30)
-        if out.returncode != 0:
-            return jsonify({'error': f'Publishing {topic} failed, the applied configuration is unchanged: '
-                                     f'{out.stderr.strip()}'}), 502
+    # leaves the meter with its old entities rather than with none. One start of
+    # the batch helper for all topics: a start per topic takes about a second.
+    with tempfile.NamedTemporaryFile('w', suffix='.publish', delete=False) as f:
+        for topic, payload in new_topics.items():
+            f.write(f'{topic}\t{payload}\n')
+        publish_file = f.name
+    try:
+        out = subprocess.run([MQTT_BATCH, 'publish', publish_file], capture_output=True, text=True, timeout=120)
+    finally:
+        os.remove(publish_file)
+    if out.returncode != 0:
+        return jsonify({'error': 'Publishing failed, the applied configuration is unchanged: '
+                                 f'{out.stderr.strip()}'}), 502
     removed = [t for t in discovery_files.meter_topics(retained, meter_id) if t not in new_topics]
-    for topic in removed:
-        subprocess.run([MQTT_RETAINED, 'clear', topic], capture_output=True, text=True, timeout=30)
+    if removed:
+        with tempfile.NamedTemporaryFile('w', suffix='.clear', delete=False) as f:
+            f.write(''.join(f'{t}\n' for t in removed))
+            clear_file = f.name
+        try:
+            subprocess.run([MQTT_BATCH, 'clear', clear_file], capture_output=True, text=True, timeout=120)
+        finally:
+            os.remove(clear_file)
     discovery_files.save('applied', meter_id, draft)
     # The meter is manual from now on: the generated discovery does not replace it.
     config = read_config()

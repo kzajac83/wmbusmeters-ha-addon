@@ -252,6 +252,24 @@ window.addEventListener('load', () => {
     document.body.appendChild(popup);
   }
 
+  // The actions talk to the broker and can take a few seconds: show what is
+  // going on and keep the buttons from being pressed again meanwhile.
+  function showBusy(text) {
+    const busy = document.createElement('div');
+    busy.className = 'discovery-busy';
+    busy.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);padding:20px;' +
+      'border:1px solid #ccc;background:#fff;z-index:10000';
+    busy.innerHTML = '<div class="d-flex align-items-center"><div class="spinner-border spinner-border-sm me-2" ' +
+      `role="status"></div><span>${escapeHtml(text)}</span></div>`;
+    document.body.appendChild(busy);
+    const buttons = document.querySelectorAll('.meter-discovery-tools button');
+    buttons.forEach(b => { b.disabled = true; });
+    return () => {
+      busy.remove();
+      buttons.forEach(b => { b.disabled = false; });
+    };
+  }
+
   function topicList(title, topics) {
     if (!topics.length) {
       return '';
@@ -287,6 +305,7 @@ window.addEventListener('load', () => {
   }
 
   function generateDraft(section, id, force = false) {
+    const done = showBusy('Generating the draft...');
     discoveryRequest(`/discovery_api/${encodeURIComponent(id)}/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -300,7 +319,7 @@ window.addEventListener('load', () => {
       }
       showMessage(ok ? data.message : data.error);
       refreshDiscoveryState(section);
-    }).catch(error => showMessage(String(error)));
+    }).catch(error => showMessage(String(error))).finally(done);
   }
 
   document.addEventListener('click', event => {
@@ -324,6 +343,7 @@ window.addEventListener('load', () => {
     if (target.classList.contains('discovery-generate')) {
       generateDraft(section, id);
     } else if (target.classList.contains('discovery-download')) {
+      const done = showBusy('Preparing the file...');
       fetch(`/discovery_api/${encodeURIComponent(id)}/file?kind=drafts`)
         .then(response => {
           if (!response.ok) {
@@ -339,23 +359,32 @@ window.addEventListener('load', () => {
           link.click();
           link.remove();
         })
-        .catch(error => showMessage(error.message));
+        .catch(error => showMessage(error.message))
+        .finally(done);
     } else if (target.classList.contains('discovery-upload')) {
       section.querySelector('.discovery-file').click();
     } else if (target.classList.contains('discovery-apply')) {
+      const reading = showBusy('Reading the discovery of this meter from the broker...');
       discoveryRequest(`/discovery_api/${encodeURIComponent(id)}/preview`)
         .then(({ ok, data }) => {
+          reading();
           if (!ok) {
             showMessage(data.error, data.problems || []);
             return;
           }
+          const count = data.added.length + data.changed.length + data.unchanged.length;
           showPreview(id, data, () => {
+            const applying = showBusy(`Publishing ${count} entities to Home Assistant...`);
             discoveryRequest(`/discovery_api/${encodeURIComponent(id)}/apply`, { method: 'POST' })
               .then(({ ok, data }) => showMessage(ok ? data.message : data.error, data.problems || [], ok))
-              .catch(error => showMessage(String(error)));
+              .catch(error => showMessage(String(error)))
+              .finally(applying);
           });
         })
-        .catch(error => showMessage(String(error)));
+        .catch(error => {
+          reading();
+          showMessage(String(error));
+        });
     }
   });
 
@@ -366,6 +395,7 @@ window.addEventListener('load', () => {
     }
     const section = target.closest('.json-section');
     const id = meterIdOf(section);
+    const done = showBusy('Checking and saving the draft...');
     target.files[0].text()
       .then(text => discoveryRequest(`/discovery_api/${encodeURIComponent(id)}/draft`, {
         method: 'POST',
@@ -377,7 +407,10 @@ window.addEventListener('load', () => {
         refreshDiscoveryState(section);
       })
       .catch(error => showMessage(String(error)))
-      .finally(() => { target.value = ''; });
+      .finally(() => {
+        done();
+        target.value = '';
+      });
   });
 
   // delete a section

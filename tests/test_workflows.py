@@ -1527,8 +1527,67 @@ def test_discovery_cache(tmp):
             proc = subprocess.run(["bash", "-c", sim], capture_output=True, text=True, timeout=30)
             check(proc.returncode == 0, f"{addon} discovery cache '{label}' exits 0 ({proc.stderr.strip()[:200]})")
             target = ws / "d" / "generated" / f"{meter_id}.json"
-            check(target.exists() == kept and (not kept or target.read_text() == disc.read_text()),
+            check(target.exists() == kept and (not kept or json.loads(target.read_text()) == json.loads(disc.read_text())),
                   f"{addon} discovery cache '{label}': {'kept' if kept else 'no file'}")
+            if not kept:
+                continue
+            # A restart and another telegram format: the kept entities stay, a
+            # generated-again attribute replaces the old one.
+            disc.write_text('{"set_date_8": {"component": "sensor", "discovery_payload": {}},'
+                            ' "total_m3": {"component": "sensor", "discovery_payload": {"new": 1}}}\n')
+            proc = subprocess.run(["bash", "-c", sim], capture_output=True, text=True, timeout=30)
+            merged = json.loads(target.read_text())
+            check(sorted(merged) == ["set_date_8", "total_m3"] and merged["total_m3"]["discovery_payload"] == {"new": 1},
+                  f"{addon} discovery cache merges another format and replaces what is generated again ({merged})")
+
+
+def test_batch_helper(tmp):
+    """run.sh writes mosquitto_batch.sh, which the panel uses to publish a manual
+    configuration in one start: every "<topic><TAB><payload>" line published
+    retained, every topic of a clear file removed; a failure stops the publish."""
+    for addon in (EDGE, TEST):
+        run_text = (ROOT / addon / "run.sh").read_text()
+        start = run_text.find("    cat > /wmbusmeters/mosquitto_batch.sh << EOL\n")
+        if not check(start > 0, f"{addon}/run.sh writes the batch helper"):
+            continue
+        end = run_text.index("\nEOL\n", start) + len("\nEOL\n")
+        ws = Path(tmp) / f"batch_{addon}"
+        ws.mkdir(parents=True)
+        log = ws / "pub.log"
+        pub = ws / "mosquitto_pub"
+        pub.write_text(f'#!/bin/bash\nprintf "%s|" "$@" >> {log}; echo >> {log}\n'
+                       'for a in "$@"; do [ "$a" = "fail/topic" ] && exit 3; done\nexit 0\n')
+        pub.chmod(0o755)
+        helper = ws / "mosquitto_batch.sh"
+        gen = (
+            "pub_args_quoted=('-h' \"'core-mosquitto'\" '-u' \"'user'\")\n"
+            + run_text[start:end].replace("/wmbusmeters/mosquitto_batch.sh", str(helper))
+        )
+        proc = subprocess.run(["bash", "-c", gen], capture_output=True, text=True, timeout=30)
+        check(proc.returncode == 0 and helper.exists(), f"{addon} batch helper is generated ({proc.stderr.strip()[:200]})")
+        body = helper.read_text().replace("#!/usr/bin/with-contenv bashio", "#!/bin/bash").replace("/usr/bin/mosquitto_pub", str(pub))
+        helper.write_text(body)
+        helper.chmod(0o755)
+        payload = '{"name":"Water total","unique_id":"wmbusmeters_04913581_total_m3"}'
+        (ws / "pub.txt").write_text(f"homeassistant/sensor/wmbusmeters/04913581_total_m3/config\t{payload}\n"
+                                    "homeassistant/sensor/wmbusmeters/04913581_x/config\t{\"a b\":1}\n")
+        proc = subprocess.run([str(helper), "publish", str(ws / "pub.txt")], capture_output=True, text=True, timeout=30)
+        lines = log.read_text().splitlines() if log.exists() else []
+        check(proc.returncode == 0 and len(lines) == 2
+              and lines[0] == f"-h|core-mosquitto|-u|user|-r|-t|homeassistant/sensor/wmbusmeters/04913581_total_m3/config|-m|{payload}|"
+              and lines[1].endswith('-m|{"a b":1}|'),
+              f"{addon} batch helper publishes every line retained, payloads intact (got {lines})")
+        log.unlink()
+        (ws / "clear.txt").write_text("homeassistant/sensor/wmbusmeters/04913581_old/config\n")
+        proc = subprocess.run([str(helper), "clear", str(ws / "clear.txt")], capture_output=True, text=True, timeout=30)
+        lines = log.read_text().splitlines() if log.exists() else []
+        check(lines == ["-h|core-mosquitto|-u|user|-r|-t|homeassistant/sensor/wmbusmeters/04913581_old/config|-n|"],
+              f"{addon} batch helper clears every listed topic (got {lines})")
+        log.unlink()
+        (ws / "fail.txt").write_text("fail/topic\tx\nnext/topic\ty\n")
+        proc = subprocess.run([str(helper), "publish", str(ws / "fail.txt")], capture_output=True, text=True, timeout=30)
+        lines = log.read_text().splitlines() if log.exists() else []
+        check(proc.returncode != 0 and len(lines) == 1, f"{addon} batch helper stops at the first failed publish")
 
 
 def test_panel_manual_discovery(tmp):
@@ -1546,10 +1605,14 @@ def test_panel_manual_discovery(tmp):
         check('sub_filter "/discovery_api/" "$http_x_ingress_path/discovery_api/";' in nginx,
               f"{addon} ingress rewrites the /discovery_api/ paths")
         check("import discovery_files" in app, f"{addon} app.py uses discovery_files.py")
+        check("function showBusy" in js and "spinner-border" in js and js.count("showBusy(") >= 6,
+              f"{addon} panel shows a busy indicator for every discovery action")
+        check("MQTT_BATCH, 'publish'" in app and "MQTT_BATCH, 'clear'" in app,
+              f"{addon} apply publishes and removes with one start of the batch helper")
         check("templates in etc/mqtt_discovery" not in js + html,
               f"{addon} panel no longer mentions the templates")
         apply_src = app.split("def discovery_apply", 1)[1]
-        check(apply_src.index("MQTT_PUB, topic, payload") < apply_src.index("'clear', topic")
+        check(apply_src.index("MQTT_BATCH, 'publish'") < apply_src.index("MQTT_BATCH, 'clear'")
               < apply_src.index("save('applied'"),
               f"{addon} apply publishes first, then removes, then stores the applied configuration")
 
@@ -1624,6 +1687,7 @@ def main():
         test_discovery_files,
         test_discovery_cache,
         test_panel_manual_discovery,
+        test_batch_helper,
         test_test_discovery_mode,
         lambda tmp: test_test_breaking_notice(f"{tmp}/edge", EDGE, "build_ha_addon_edge.yml"),
         lambda tmp: test_test_discovery_hook(f"{tmp}/edge", EDGE),

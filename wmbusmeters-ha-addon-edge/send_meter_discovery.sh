@@ -73,17 +73,21 @@ then
 fi
 
 # --- Keep the generated discovery of the meter, in every mode -------------------
-# The panel makes a draft of the "manual" mode from it. A meter that sends
-# several telegram formats gets here again when new fields arrive, so the file
-# grows with the formats.
+# The panel makes a draft of the "manual" mode from it. The new discovery is
+# merged into the kept one (an attribute that is generated again replaces the
+# old one), so a meter that sends several telegram formats keeps the entities
+# of a format that has not arrived since the last start (wmbusmeters#2161).
 # BEGIN discovery cache
 DISCOVERY_DIR="${WMBUSMETERS_DISCOVERY_DIR:-/data/discovery}"
 case "$ID" in
     *[!0-9A-Za-z]*) ;;
     *)
         if [ -s "$DISCOVERY_FILE" ] && mkdir -p "$DISCOVERY_DIR/generated" 2>/dev/null; then
-            cp "$DISCOVERY_FILE" "$DISCOVERY_DIR/generated/$ID.json.tmp" \
-                && mv "$DISCOVERY_DIR/generated/$ID.json.tmp" "$DISCOVERY_DIR/generated/$ID.json"
+            CACHE="$DISCOVERY_DIR/generated/$ID.json"
+            if [ ! -s "$CACHE" ] || ! jq -s '.[0] + .[1]' "$CACHE" "$DISCOVERY_FILE" > "$CACHE.tmp" 2>/dev/null; then
+                cp "$DISCOVERY_FILE" "$CACHE.tmp"
+            fi
+            mv "$CACHE.tmp" "$CACHE"
         fi
         ;;
 esac
