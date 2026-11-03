@@ -1611,6 +1611,8 @@ def test_panel_manual_discovery(tmp):
               f"{addon} app.py writes the panel lines to the add-on log at once")
         check("function showBusy" in js and "spinner-border" in js and js.count("showBusy(") >= 6,
               f"{addon} panel shows a busy indicator for every discovery action")
+        check("function showConfirm" in js and re.search(r"(?<![A-Za-z.])confirm\(", js) is None,
+              f"{addon} panel asks in its own style, not with the browser's confirm()")
         check("MQTT_BATCH, 'publish'" in app and "MQTT_BATCH, 'clear'" in app,
               f"{addon} apply publishes and removes with one start of the batch helper")
         check("templates in etc/mqtt_discovery" not in js + html,

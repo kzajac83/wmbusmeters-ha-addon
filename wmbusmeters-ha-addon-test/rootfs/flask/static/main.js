@@ -264,10 +264,32 @@ window.addEventListener('load', () => {
     document.body.appendChild(busy);
     const buttons = document.querySelectorAll('.meter-discovery-tools button');
     buttons.forEach(b => { b.disabled = true; });
+    let open = true;
     return () => {
+      if (!open) {
+        return;
+      }
+      open = false;
       busy.remove();
       buttons.forEach(b => { b.disabled = false; });
     };
+  }
+
+  // A question in the style of the panel, instead of the browser's own dialog.
+  function showConfirm(text, okLabel, onOk) {
+    const popup = document.createElement('div');
+    popup.className = 'discovery-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);padding:20px;' +
+      'border:1px solid #ccc;background:#fff;z-index:9999;max-width:90vw;max-height:80vh;overflow:auto';
+    popup.innerHTML = `<p>${escapeHtml(text)}</p>` +
+      `<button class="confirm-ok btn btn-outline-primary" type="button">${escapeHtml(okLabel)}</button> ` +
+      '<button class="confirm-cancel btn btn-outline-secondary" type="button">Cancel</button>';
+    popup.querySelector('.confirm-cancel').addEventListener('click', () => popup.remove());
+    popup.querySelector('.confirm-ok').addEventListener('click', () => {
+      popup.remove();
+      onOk();
+    });
+    document.body.appendChild(popup);
   }
 
   function topicList(title, topics) {
@@ -312,9 +334,9 @@ window.addEventListener('load', () => {
       body: JSON.stringify({ force })
     }).then(({ ok, data }) => {
       if (!ok && data.confirm && !force) {
-        if (confirm(`${data.error} Replace it?`)) {
-          generateDraft(section, id, true);
-        }
+        done();
+        showConfirm(`${data.error} Replace it with the generated discovery?`, 'Replace',
+          () => generateDraft(section, id, true));
         return;
       }
       showMessage(ok ? data.message : data.error);
@@ -336,6 +358,7 @@ window.addEventListener('load', () => {
     if (!known.some(c => target.classList.contains(c))) {
       return;
     }
+    target.blur();
     if (!id) {
       showMessage('The meter needs an id first.');
       return;
