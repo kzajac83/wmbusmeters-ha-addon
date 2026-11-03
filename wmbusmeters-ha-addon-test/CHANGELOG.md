@@ -1,3 +1,5 @@
+## 3.1.2.3
+- Local HA test build on top of 3.1.2.2: Apply as manual publishes all entities in one go (seconds instead of about a second per entity), every discovery action in the panel shows a spinner with what it is doing, and the generated discovery is kept across restarts, so a draft holds every telegram format.
 ## 3.1.2.2
 - Local HA test build on top of 3.1.2.1: the panel shows the MQTT section right after the wmbusmeters configuration, the meters come last.
 ## 3.1.2.1
