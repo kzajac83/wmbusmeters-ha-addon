@@ -1,3 +1,5 @@
+## 3.1.2.2
+- Local HA test build on top of 3.1.2.1: the panel shows the MQTT section right after the wmbusmeters configuration, the meters come last.
 ## 3.1.2.1
 - Local HA test build: wmbusmeters from kzajac83/wmbusmeters `metershell-new-fields` (the metershell runs again when a telegram brings new fields; fhkvdataiii keeps the 0x08 telegram apart) and the add-on from `discovery-modes-next`: the automatic discovery removes only fields the driver does not define, and the manual mode is a configuration per meter, generated, downloaded, uploaded and applied in the panel.
 ## 3.1.1.21 
