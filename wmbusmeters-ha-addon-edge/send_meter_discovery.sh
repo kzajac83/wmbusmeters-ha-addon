@@ -10,11 +10,13 @@
 #   { "driver":"amiplus", "id":"...", ... }
 # and publishes the HA MQTT discovery payload(s) generated from that telegram
 # and the driver - only this driver, nothing else. This is the "auto" MQTT
-# discovery mode; in "manual" mode mqtt_discovery.sh publishes the templates
-# under <data path>/etc/mqtt_discovery at start-up instead, and "disable"
-# publishes nothing at all. The add-on's "MQTT discovery" setting is the default
-# of every meter, a meter may carry its own "mqtt_discovery" key and then that
-# one wins. See the "MQTT discovery" section of DOCS.md.
+# discovery mode; in "manual" mode mqtt_discovery.sh publishes the configuration
+# applied in the panel at start-up instead, and "disable" publishes nothing at
+# all. In every mode the generated discovery is kept in
+# /data/discovery/generated/<id>.json, the panel makes a manual draft from it.
+# The add-on's "MQTT discovery" setting is the default of every meter, a meter
+# may carry its own "mqtt_discovery" key and then that one wins. See the
+# "MQTT discovery" section of DOCS.md.
 #
 # Exits cleanly (0) if anything is missing, wmbusmeters must never be blocked.
 # ==============================================================================
@@ -70,6 +72,23 @@ then
     exit 0
 fi
 
+# --- Keep the generated discovery of the meter, in every mode -------------------
+# The panel makes a draft of the "manual" mode from it. A meter that sends
+# several telegram formats gets here again when new fields arrive, so the file
+# grows with the formats.
+# BEGIN discovery cache
+DISCOVERY_DIR="${WMBUSMETERS_DISCOVERY_DIR:-/data/discovery}"
+case "$ID" in
+    *[!0-9A-Za-z]*) ;;
+    *)
+        if [ -s "$DISCOVERY_FILE" ] && mkdir -p "$DISCOVERY_DIR/generated" 2>/dev/null; then
+            cp "$DISCOVERY_FILE" "$DISCOVERY_DIR/generated/$ID.json.tmp" \
+                && mv "$DISCOVERY_DIR/generated/$ID.json.tmp" "$DISCOVERY_DIR/generated/$ID.json"
+        fi
+        ;;
+esac
+# END discovery cache
+
 # --- "MQTT discovery" mode of this meter (auto/manual/disable) ----------------
 # Generating from the telegram and the driver is the "auto" mode only. The
 # add-on's "MQTT discovery" setting is the default of every meter, a meter may
@@ -88,7 +107,7 @@ case "$OWN_MODE" in
 esac
 if [ "$MODE" != "auto" ]; then
     case "$MODE" in
-        manual)  echo "metershell: MQTT discovery is 'manual' (${SOURCE}): the templates were published at start-up, no generated discovery for $NAME" >&2 ;;
+        manual)  echo "metershell: MQTT discovery is 'manual' (${SOURCE}): the configuration applied in the panel is published at start-up, no generated discovery for $NAME" >&2 ;;
         disable) echo "metershell: MQTT discovery is 'disable' (${SOURCE}): publishing nothing for $NAME" >&2 ;;
         *)       echo "metershell: MQTT discovery mode is '${MODE}' (${SOURCE}), not one of auto, manual, disable: publishing nothing for $NAME" >&2 ;;
     esac

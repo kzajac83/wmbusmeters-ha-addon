@@ -82,7 +82,7 @@ CONFIG_DATA_PATH=$(bashio::jq "${CONFIG_PATH}" '.data_path')
 MQTT_DISCOVERY_MODE="$(jq -r '.mqtt_discovery // empty' ${CONFIG_PATH} 2>/dev/null)"
 case "${MQTT_DISCOVERY_MODE}" in
     auto)    bashio::log.info "MQTT discovery mode: auto - the generated discovery is published when the first telegram of a meter arrives";;
-    manual)  bashio::log.info "MQTT discovery mode: manual - the templates in ${CONFIG_DATA_PATH}/etc/mqtt_discovery are published at start-up";;
+    manual)  bashio::log.info "MQTT discovery mode: manual - the configuration applied in the panel for every meter is published at start-up";;
     disable) bashio::log.info "MQTT discovery mode: disable - no Home Assistant entities are created or updated; the meter data is still published to MQTT";;
     *)       bashio::log.warning "MQTT discovery mode is '${MQTT_DISCOVERY_MODE}', not one of auto, manual, disable - nothing is published";;
 esac
@@ -308,9 +308,19 @@ esac
 EOL
     chmod a+x /wmbusmeters/mosquitto_retained.sh
 
-    # Manual MQTT discovery: publish the templates in
-    # <data path>/etc/mqtt_discovery for the meters whose mode is manual - the
-    # add-on mode above or the meter's own "mqtt_discovery" key. "auto" is
+    # HA's discovery prefix, for the manual discovery that the panel applies.
+    MQTT_DISCOVERY_PREFIX="homeassistant"
+    if bashio::services.available "mqtt"; then
+        prefix=$(bashio::services mqtt "discovery_prefix")
+        if [ -n "$prefix" ] && [ "$prefix" != "null" ]; then
+            MQTT_DISCOVERY_PREFIX="$prefix"
+        fi
+    fi
+    printf '%s\n' "$MQTT_DISCOVERY_PREFIX" > /wmbusmeters/discovery_prefix
+
+    # Manual MQTT discovery: publish the configuration applied in the panel
+    # for the meters whose mode is manual - the add-on mode above or the
+    # meter's own "mqtt_discovery" key. "auto" is
     # published by send_meter_discovery.sh when a telegram arrives and
     # "disable" publishes nothing.
     # BEGIN manual discovery call

@@ -64,13 +64,20 @@ By default it is not enabled and leverages the _Moquitto broker_ addon details p
 
 - **Disable**: no Home Assistant entities are created or updated; the meter data is still published to MQTT. Configure the entities yourself (see _Manual configuration_ below).
 - **Automatic**: the add-on creates the Home Assistant entities itself. When the first telegram of a meter arrives after the add-on starts, the discovery is generated from that telegram and the meter driver: one entity per field of the telegram, with the unit, device class and state class that the driver describes. This is the behaviour of 3.1 and later. The `[test]` add-on is delivered with this setting, the `[edge]` and stable add-ons with _Disable_: turning it on there is your choice.
-- **Manual**: the add-on publishes the discovery payloads from the templates in `<data path>/etc/mqtt_discovery/<driver>.json`, one file per driver, like the add-on did before 3.1. This is for entities that the generated discovery does not describe the way you need them, e.g. a flow sensor that needs `force_update: true` so that every telegram, including a repeated `0`, reaches Home Assistant (#2138).
+- **Manual**: you decide which entities a meter gets and how they are configured, and the add-on keeps that configuration until you apply another one. This is for entities that the generated discovery does not describe the way you need them, e.g. a flow sensor that needs `force_update: true` so that every telegram, including a repeated `0`, reaches Home Assistant (#2138).
 
 A configuration that was written before this option existed keeps its setting: the old "Enable mqtt discovery" (`true`/`false`) becomes _Automatic_/_Disable_ on the first start after the update.
 
-A meter whose driver has no template gets no discovery in the manual mode; the templates of the add-on are only a starting point. Existing templates are never overwritten: the add-on copies its own templates only when the file does not exist, so your edits survive an update. To go back to the bundled version of a template, delete the file in `<data path>/etc/mqtt_discovery` and restart the add-on.
+A manual configuration belongs to one meter (its id), so two meters with the same driver can differ (see also "Every meter can choose its own mode" below). It is made in the panel, under the meter:
 
-The manual mode removes the retained discovery of a manual meter that the templates do not publish any more, and of a meter that is not in the configuration any more, so entities of deleted templates or meters do not stay in Home Assistant forever. The discovery of the other meters is left alone: the generated one belongs to the meter that publishes it, which cleans up its own stale entities, and a disabled meter keeps what it has.
+- **Generate draft** makes a draft from the discovery that the add-on generated for the meter since the start, in every mode. A meter that sends several telegram formats gets the fields of every format that has arrived. If no telegram of the meter has arrived yet, try again once one did. An existing draft that differs is only replaced after you confirm.
+- **Download draft** saves the draft as a JSON file, to edit it, e.g. to add `force_update: true` to an entity or to remove entities you do not want.
+- **Upload draft** stores an edited file, or one of your own, as the draft of the meter. The file maps an attribute to its `component` and `discovery_payload`, the format of the generated discovery and of the templates of the add-on before 3.1; `{name}`, `{id}`, `{driver}` and `{attribute}` are replaced when it is published. An invalid file is refused and the draft stays as it was.
+- **Apply as manual...** shows which entities the draft adds, changes and removes, and after you confirm publishes it, removes the discovery of the meter that the draft does not hold any more, and switches the meter to the manual mode. If publishing fails, the meter keeps its entities and nothing is applied.
+
+The entities keep their topics, unique ids and device, so their history stays. The add-on publishes the applied configuration of every manual meter at every start; an add-on update, a restart or a new telegram does not change it. A newer add-on may generate more entities or better settings: generate a new draft, compare it with yours and apply it when you want to. A manual meter without an applied configuration keeps the discovery it has until you apply one. The files are kept in the add-on storage (`/data/discovery`), also when you switch back to automatic.
+
+The manual mode also removes the retained discovery of a meter that is not in the configuration any more. The discovery of the other meters is left alone: the generated one belongs to the meter that publishes it, and a disabled meter keeps what it has.
 
 In the automatic mode:
 
@@ -89,11 +96,11 @@ The setting above is the default of every meter, and a meter can deviate from it
 - **Default (the add-on setting)**: the meter uses the setting above.
 - **Disable**, **Automatic**, **Manual**: the meter uses this mode, whatever the add-on setting is.
 
-So one meter can publish the generated discovery, a second one the templates of its own file and all the others nothing at all, e.g.:
+So one meter can publish the generated discovery, a second one its own manual configuration and all the others nothing at all, e.g.:
 
 - `MainWater`: **Disable** - no entities, the meter data is published to MQTT as before.
 - `Electricity`: **Automatic** - the generated entities of the driver and the first telegram.
-- `Gas`: **Manual** - the templates in `<data path>/etc/mqtt_discovery/<driver>.json`.
+- `Gas`: **Manual** - the configuration applied in the panel for this meter.
 - `Heat`: **Default (the add-on setting)** - whatever the setting above is.
 
 The add-on logs the meters that deviate from the add-on setting at every start, so that the log shows the effective mode of every meter.

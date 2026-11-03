@@ -1,20 +1,21 @@
 #!/usr/bin/with-contenv bashio
 # ==============================================================================
-# "MQTT discovery" in the manual mode: publishes the discovery payloads from
-# the templates in <data path>/etc/mqtt_discovery/<driver>.json, one file per
-# driver, like the add-on did before 3.1 - for the meters whose mode is manual
-# (the add-on's "MQTT discovery" setting or the meter's own "mqtt_discovery"
-# key). The generated ("auto") discovery of every other meter is published by
+# "MQTT discovery" in the manual mode: publishes the configuration that was
+# applied in the panel for a meter, /data/discovery/applied/<id>.json - for the
+# meters whose mode is manual (the add-on's "MQTT discovery" setting or the
+# meter's own "mqtt_discovery" key). A manual meter without an applied
+# configuration publishes nothing and keeps its discovery until one is applied.
+# The generated ("auto") discovery of every other meter is published by
 # send_meter_discovery.sh when its first telegram arrives.
 #
 #   /mqtt_discovery.sh -h <broker> -p <port> -u <user> -P <password> \
 #                      -c <options_custom.json> -w <data path>
 #
-# run.sh calls this at start-up, after the MQTT helpers are written. A template
-# payload may use the placeholders {name}, {id}, {driver} and {attribute}.
+# run.sh calls this at start-up, after the MQTT helpers are written. A payload
+# may use the placeholders {name}, {id}, {driver} and {attribute}.
 #
-# Exits cleanly (0): a missing template or an unreachable broker only skips the
-# discovery, the add-on must never be blocked.
+# Exits cleanly (0): a missing configuration or an unreachable broker only skips
+# the discovery, the add-on must never be blocked.
 # ==============================================================================
 
 aryDiscTopic=()
@@ -65,14 +66,9 @@ if bashio::services.available "mqtt"; then
     fi
 fi
 
-# Copy the bundled templates, but never overwrite one that the user edited:
-# their own templates are the point of this mode. Update a copy by deleting it
-# here and letting the next start copy the bundled version again.
-[ ! -d $CONFIG_DATA_PATH/etc/mqtt_discovery ] && mkdir -p $CONFIG_DATA_PATH/etc/mqtt_discovery
-templates_before=$(ls -1 ${CONFIG_DATA_PATH}/etc/mqtt_discovery 2>/dev/null | wc -l)
-cp -n /mqtt_discovery/* ${CONFIG_DATA_PATH}/etc/mqtt_discovery/ 2>/dev/null || true
-templates_after=$(ls -1 ${CONFIG_DATA_PATH}/etc/mqtt_discovery 2>/dev/null | wc -l)
-bashio::log.info "Templates in ${CONFIG_DATA_PATH}/etc/mqtt_discovery: ${templates_after} file(s), seeded $((templates_after - templates_before)) new."
+# The configurations applied in the panel, one file per meter (see
+# rootfs/flask/discovery_files.py).
+DISCOVERY_DIR="${WMBUSMETERS_DISCOVERY_DIR:-/data/discovery}"
 
 # Enumerate defined meters
 IFS=$'\n'
@@ -104,7 +100,7 @@ do
     aryManualIds+=("${aryKV['id']}")
 
     if [ "${aryKV['id']+true}" ] && [ "${aryKV['driver']+true}" ] ; then
-        file="$CONFIG_DATA_PATH/etc/mqtt_discovery/${aryKV['driver']}.json"
+        file="$DISCOVERY_DIR/applied/${aryKV['id']}.json"
         if test -f "$file"; then
 
             for attribute in $(jq --raw-output -c -M '. | keys[]' $file)
@@ -128,7 +124,10 @@ do
                 fi
             done
         else
-            bashio::log.info "  No template for meter ${aryKV['name']}: $file not found"
+            # Nothing applied yet: keep what the meter has, e.g. the generated
+            # discovery from before the switch to manual.
+            bashio::log.info "  No discovery applied for meter ${aryKV['name']} yet: apply one in the panel. Its current discovery is kept."
+            arySkippedIds+=("${aryKV['id']}")
         fi
     fi
 done

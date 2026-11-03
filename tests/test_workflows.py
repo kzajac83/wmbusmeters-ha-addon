@@ -936,7 +936,8 @@ def _run_mode_migration(tmp, addon, run_text, label, config, expected_gone=("ena
 
 def _check_mode_wiring(addon, default_mode):
     """Both discovery pipelines must honour the mode, and the manual one must
-    actually work at runtime: the script, its templates and the panel choice."""
+    actually work at runtime: the script, the applied configurations and the
+    panel choice."""
     send_text = (ROOT / addon / "send_meter_discovery.sh").read_text()
     run_text = (ROOT / addon / "run.sh").read_text()
 
@@ -985,20 +986,18 @@ def _check_mode_wiring(addon, default_mode):
         f"{addon}/mqtt_discovery.sh publishes only for the meters whose mode is manual",
     )
     check(
-        "cp -n /mqtt_discovery/*" in script,
-        f"{addon}/mqtt_discovery.sh never overwrites a template the user edited",
+        'applied/${aryKV[\'id\']}.json' in script and "/mqtt_discovery/" not in script,
+        f"{addon}/mqtt_discovery.sh publishes the configuration applied for the meter, no templates",
     )
-
-    templates = sorted(p.name for p in (ROOT / addon / "mqtt_discovery").glob("*.json"))
     check(
-        len(templates) > 30 and "hydrus.json" in templates,
-        f"{addon}/mqtt_discovery holds the templates of the pre-3.1 add-on (got {len(templates)})",
+        not (ROOT / addon / "mqtt_discovery").exists(),
+        f"{addon} ships no per-driver discovery templates any more",
     )
     dockerfile = (ROOT / addon / "Dockerfile").read_text()
     runtime = dockerfile.split("AS runtime", 1)[1]
     check(
-        "COPY mqtt_discovery/ /mqtt_discovery/" in runtime and "COPY mqtt_discovery.sh /" in runtime,
-        f"{addon}/Dockerfile ships the manual pipeline",
+        "COPY mqtt_discovery.sh /" in runtime and "COPY mqtt_discovery/" not in runtime,
+        f"{addon}/Dockerfile ships the manual pipeline without templates",
     )
     docs = (ROOT / addon / "DOCS.md").read_text()
     check(
@@ -1114,19 +1113,16 @@ def test_channels_share_the_manual_pipeline(tmp):
     mode and the migration differ."""
     for rel in ("mqtt_discovery.sh", "send_meter_discovery.sh",
                 "rootfs/flask/templates/index.html",
-                "rootfs/flask/static/main.js"):
+                "rootfs/flask/static/main.js",
+                "rootfs/flask/app.py",
+                "rootfs/flask/discovery_files.py",
+                "rootfs/etc/nginx/nginx.conf"):
         edge = (ROOT / EDGE / rel).read_text()
         test = (ROOT / TEST / rel).read_text()
         check(
             edge == test,
             f"{rel} is identical in edge and test",
         )
-    edge_templates = sorted(p.name for p in (ROOT / EDGE / "mqtt_discovery").glob("*.json"))
-    test_templates = sorted(p.name for p in (ROOT / TEST / "mqtt_discovery").glob("*.json"))
-    check(
-        edge_templates == test_templates and edge_templates,
-        f"edge and test ship the same {len(edge_templates)} discovery templates",
-    )
     for addon in (EDGE, TEST):
         html = (ROOT / addon / "rootfs/flask/templates/index.html").read_text()
         check(
@@ -1314,16 +1310,15 @@ def test_hook_honours_the_meter_mode(tmp):
                 )
 
 
-def _manual_pipeline_case(tmp, addon, label, config, templates, retained):
-    """Run the real mqtt_discovery.sh with stubbed broker binaries, one template
-    file per driver and a fixed list of retained topics."""
+def _manual_pipeline_case(tmp, addon, label, config, applied, retained):
+    """Run the real mqtt_discovery.sh with stubbed broker binaries, the applied
+    configuration of some meters (by id) and a fixed list of retained topics."""
     script = (ROOT / addon / "mqtt_discovery.sh").read_text()
     ws = Path(tmp) / f"pipeline_{addon.replace('wmbusmeters-ha-addon-', '')}_{label.replace(' ', '_')}"
     (ws / "data" / "etc").mkdir(parents=True)
-    seed = ws / "seed"
-    seed.mkdir()
-    for driver, body in templates.items():
-        (seed / f"{driver}.json").write_text(json.dumps(body))
+    (ws / "discovery" / "applied").mkdir(parents=True)
+    for meter_id, body in applied.items():
+        (ws / "discovery" / "applied" / f"{meter_id}.json").write_text(json.dumps(body))
     cfg = ws / "options_custom.json"
     cfg.write_text(json.dumps(config, indent=True) + "\n")
     log = ws / "broker.log"
@@ -1342,12 +1337,12 @@ def _manual_pipeline_case(tmp, addon, label, config, templates, retained):
         "bashio::services() { echo null; }\n"
         + script.replace("/usr/bin/mosquitto_pub", str(pub))
                 .replace("/usr/bin/mosquitto_sub", str(sub))
-                .replace("cp -n /mqtt_discovery/*", f"cp -n {seed}/*")
                 .replace("-p /dev/shm/", "")
     )
     proc = subprocess.run(
         ["bash", str(runner), "-c", str(cfg), "-w", str(ws / "data")],
         capture_output=True, text=True, timeout=60,
+        env=dict(os.environ, WMBUSMETERS_DISCOVERY_DIR=str(ws / "discovery")),
     )
     published, removed = set(), set()
     if log.exists():
@@ -1361,10 +1356,11 @@ def _manual_pipeline_case(tmp, addon, label, config, templates, retained):
 
 
 def test_manual_pipeline_publishes_for_manual_meters_only(tmp):
-    """With a per-meter mode the manual pipeline publishes for the meters whose
-    mode is manual only, and it removes only their retained discovery plus what
-    a meter that is gone left behind: what an "auto" meter generates and what a
-    "disable"d meter has must survive."""
+    """With a per-meter mode the manual pipeline publishes the applied
+    configuration of the meters whose mode is manual only, and it removes only
+    their retained discovery plus what a meter that is gone left behind: what an
+    "auto" meter generates, what a "disable"d meter has and what a manual meter
+    without an applied configuration has must survive."""
     template = {
         "total_m3": {
             "component": "sensor",
@@ -1375,7 +1371,7 @@ def test_manual_pipeline_publishes_for_manual_meters_only(tmp):
             },
         },
     }
-    templates = {"hydrus": template, "amiplus": template}
+    applied = {"12345678": template, "22222222": template}
     cases = [
         (
             "one manual meter next to auto and disable meters",
@@ -1385,7 +1381,7 @@ def test_manual_pipeline_publishes_for_manual_meters_only(tmp):
                     {"name": "MainWater", "driver": "hydrus", "id": "04913581"},
                     {"name": "Gas", "driver": "amiplus", "id": "12345678", "mqtt_discovery": "manual"},
                     {"name": "Heat", "driver": "hydrus", "id": "87654321", "mqtt_discovery": "disable"},
-                    # manual, but its driver has no template
+                    # manual, but nothing applied yet
                     {"name": "Elec", "driver": "lansen", "id": "11112222", "mqtt_discovery": "manual"},
                 ],
             },
@@ -1401,10 +1397,9 @@ def test_manual_pipeline_publishes_for_manual_meters_only(tmp):
             {"homeassistant/sensor/wmbusmeters/12345678_total_m3/config"},
             {
                 "homeassistant/sensor/wmbusmeters/12345678_status_GONE/config",
-                "homeassistant/sensor/wmbusmeters/11112222_total_m3/config",
                 "homeassistant/sensor/wmbusmeters/99999999_total_m3/config",
             },
-            ["Skipping meter MainWater", "Skipping meter Heat", "No template for meter Elec"],
+            ["Skipping meter MainWater", "Skipping meter Heat", "No discovery applied for meter Elec yet"],
         ),
         (
             "the add-on setting is manual, one meter generates its own",
@@ -1427,7 +1422,7 @@ def test_manual_pipeline_publishes_for_manual_meters_only(tmp):
     ]
     for addon in (EDGE, TEST):
         for label, config, retained, expected_published, expected_removed, expected_log in cases:
-            proc, published, removed = _manual_pipeline_case(tmp, addon, label, config, templates, retained)
+            proc, published, removed = _manual_pipeline_case(tmp, addon, label, config, applied, retained)
             if not check(
                 proc.returncode == 0,
                 f"{addon} manual pipeline '{label}' exits 0 ({proc.stderr.strip()[:200]})",
@@ -1446,6 +1441,117 @@ def test_manual_pipeline_publishes_for_manual_meters_only(tmp):
                     line in proc.stdout,
                     f"{addon} manual pipeline '{label}' logs {line!r} (got {proc.stdout.strip()!r})",
                 )
+
+
+def _discovery_files(addon):
+    """The real rootfs/flask/discovery_files.py of the add-on, imported."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        f"discovery_files_{addon.replace('-', '_')}", ROOT / addon / "rootfs/flask/discovery_files.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_discovery_files(tmp):
+    """The manual configuration of a meter: drafts and applied files per meter id,
+    validation, the published topics and the preview of an apply."""
+    for addon in (EDGE, TEST):
+        df = _discovery_files(addon)
+        os.environ["WMBUSMETERS_DISCOVERY_DIR"] = str(Path(tmp) / f"files_{addon}")
+        try:
+            check(df.valid_meter_id("04913581") and not df.valid_meter_id("0491358*")
+                  and not df.valid_meter_id("../etc") and not df.valid_meter_id(""),
+                  f"{addon} discovery files: only a concrete meter id has files")
+            entry = {"component": "sensor",
+                     "discovery_payload": {"name": "{name} total", "unique_id": "wmbusmeters_{id}_{attribute}",
+                                           "state_topic": "wmbusmeters/{name}", "force_update": True}}
+            draft = {"total_m3": entry, "status": {"component": "binary_sensor", "discovery_payload": {"name": "x"}}}
+            check(df.validate(draft) == [], f"{addon} discovery files: a generated-style file is valid")
+            check(df.validate([]) and df.validate({}) and df.validate({"a b": entry})
+                  and df.validate({"x": {"component": "Sensor!", "discovery_payload": {}}})
+                  and df.validate({"x": {"component": "sensor", "discovery_payload": "no"}}),
+                  f"{addon} discovery files: invalid files are refused")
+            df.save("drafts", "04913581", draft)
+            check(df.load("drafts", "04913581") == draft and df.load("applied", "04913581") is None,
+                  f"{addon} discovery files: drafts and applied files are separate")
+            topics = df.topics(draft, "04913581", "Water", "apatorna1")
+            payload = json.loads(topics["homeassistant/sensor/wmbusmeters/04913581_total_m3/config"])
+            check(payload["unique_id"] == "wmbusmeters_04913581_total_m3" and payload["name"] == "Water total"
+                  and payload["force_update"] is True,
+                  f"{addon} discovery files: placeholders are replaced, own settings kept ({payload})")
+            old = {"total_m3": {"component": "sensor", "discovery_payload": {"name": "old"}},
+                   "temp_c": {"component": "sensor", "discovery_payload": {"name": "t"}}}
+            retained = [
+                "homeassistant/sensor/wmbusmeters/04913581_total_m3/config",
+                "homeassistant/sensor/wmbusmeters/04913581_temp_c/config",
+                "homeassistant/sensor/wmbusmeters/049135810_total_m3/config",
+                "homeassistant/sensor/wmbusmeters/12345678_temp_c/config",
+            ]
+            pv = df.preview(draft, old, retained, "04913581", "Water", "apatorna1")
+            check(pv == {"added": ["homeassistant/binary_sensor/wmbusmeters/04913581_status/config"],
+                         "changed": ["homeassistant/sensor/wmbusmeters/04913581_total_m3/config"],
+                         "unchanged": [],
+                         "removed": ["homeassistant/sensor/wmbusmeters/04913581_temp_c/config"]},
+                  f"{addon} discovery files: the preview lists added, changed and removed of this meter only ({pv})")
+            cfg = {"meters": [{"name": "Water", "id": "04913581", "driver": "apatorna1:t1"}]}
+            meter = df.find_meter(cfg, "04913581")
+            check(meter is not None and df.driver_name(meter) == "apatorna1" and df.find_meter(cfg, "1") is None,
+                  f"{addon} discovery files: the meter and its driver are found by id")
+        finally:
+            del os.environ["WMBUSMETERS_DISCOVERY_DIR"]
+
+
+def test_discovery_cache(tmp):
+    """send_meter_discovery.sh keeps the generated discovery of every meter, in
+    every mode, before it looks at the mode: the panel makes a draft from it."""
+    for addon in (EDGE, TEST):
+        send_text = (ROOT / addon / "send_meter_discovery.sh").read_text()
+        if not check(
+            send_text.count("# BEGIN discovery cache") == 1 and send_text.count("# END discovery cache") == 1,
+            f"{addon}/send_meter_discovery.sh marks the discovery cache block",
+        ):
+            continue
+        check(
+            send_text.index("# END discovery cache") < send_text.index("# BEGIN discovery mode"),
+            f"{addon}/send_meter_discovery.sh keeps the generated discovery before the mode check",
+        )
+        block = send_text.split("# BEGIN discovery cache", 1)[1].split("# END discovery cache", 1)[0]
+        for label, meter_id, kept in (("meter id", "04913581", True), ("wildcard", "0491*", False)):
+            ws = Path(tmp) / f"cache_{addon}_{label.replace(' ', '_')}"
+            ws.mkdir(parents=True)
+            disc = ws / "discovery.json"
+            disc.write_text('{"total_m3": {"component": "sensor", "discovery_payload": {}}}\n')
+            sim = f"ID='{meter_id}'\nDISCOVERY_FILE={disc}\nWMBUSMETERS_DISCOVERY_DIR={ws}/d\n{block}\n"
+            proc = subprocess.run(["bash", "-c", sim], capture_output=True, text=True, timeout=30)
+            check(proc.returncode == 0, f"{addon} discovery cache '{label}' exits 0 ({proc.stderr.strip()[:200]})")
+            target = ws / "d" / "generated" / f"{meter_id}.json"
+            check(target.exists() == kept and (not kept or target.read_text() == disc.read_text()),
+                  f"{addon} discovery cache '{label}': {'kept' if kept else 'no file'}")
+
+
+def test_panel_manual_discovery(tmp):
+    """The panel offers generate/download/upload/apply under every meter, the
+    back end has the matching routes and ingress rewrites their paths."""
+    for addon in (EDGE, TEST):
+        js = (ROOT / addon / "rootfs/flask/static/main.js").read_text()
+        app = (ROOT / addon / "rootfs/flask/app.py").read_text()
+        nginx = (ROOT / addon / "rootfs/etc/nginx/nginx.conf").read_text()
+        html = (ROOT / addon / "rootfs/flask/templates/index.html").read_text()
+        for cls in ("discovery-generate", "discovery-download", "discovery-upload", "discovery-apply"):
+            check(cls in js, f"{addon} panel has the {cls} button")
+        for route in ("/status')", "/generate'", "/file')", "/draft'", "/preview')", "/apply'"):
+            check(f"@app.route('/discovery_api/<meter_id>{route}" in app, f"{addon} app.py serves /discovery_api/<id>{route}")
+        check('sub_filter "/discovery_api/" "$http_x_ingress_path/discovery_api/";' in nginx,
+              f"{addon} ingress rewrites the /discovery_api/ paths")
+        check("import discovery_files" in app, f"{addon} app.py uses discovery_files.py")
+        check("templates in etc/mqtt_discovery" not in js + html,
+              f"{addon} panel no longer mentions the templates")
+        apply_src = app.split("def discovery_apply", 1)[1]
+        check(apply_src.index("MQTT_PUB, topic, payload") < apply_src.index("'clear', topic")
+              < apply_src.index("save('applied'"),
+              f"{addon} apply publishes first, then removes, then stores the applied configuration")
 
 
 def test_panel_offers_the_meter_mode(tmp):
@@ -1515,6 +1621,9 @@ def main():
         test_conf_path_migration,
         test_test_conf_split,
         test_test_discovery_cleanup,
+        test_discovery_files,
+        test_discovery_cache,
+        test_panel_manual_discovery,
         test_test_discovery_mode,
         lambda tmp: test_test_breaking_notice(f"{tmp}/edge", EDGE, "build_ha_addon_edge.yml"),
         lambda tmp: test_test_discovery_hook(f"{tmp}/edge", EDGE),

@@ -99,9 +99,8 @@ COPY send_meter_discovery.sh /usr/bin/send_meter_discovery.sh
 COPY to-ha-discovery.xslq /usr/bin/to-ha-discovery.xslq
 RUN chmod a+x /usr/bin/send_meter_discovery.sh
 
-# manual MQTT discovery: the templates and the publisher, used in the
-# "manual" mode of the "MQTT discovery" option, see mqtt_discovery.sh.
-COPY mqtt_discovery/ /mqtt_discovery/
+# manual MQTT discovery: publishes the configuration applied in the panel, used
+# in the "manual" mode of the "MQTT discovery" option, see mqtt_discovery.sh.
 COPY mqtt_discovery.sh /
 RUN chmod a+x /mqtt_discovery.sh
 

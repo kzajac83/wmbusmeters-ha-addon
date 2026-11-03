@@ -125,7 +125,7 @@ window.addEventListener('load', () => {
       ['', 'Default (the add-on setting)'],
       ['disable', 'Disable'],
       ['auto', 'Automatic'],
-      ['manual', 'Manual (templates in etc/mqtt_discovery)']
+      ['manual', 'Manual (applied in the panel)']
     ];
     let known = false;
     let options = '';
@@ -163,11 +163,223 @@ window.addEventListener('load', () => {
                     <button class="delete-pair btn btn-outline-danger" type="button">Delete</button>
                 </div>`;
     }
-    newSection.innerHTML = newSectionHtml + renderDiscoverySelect(mode) + `<button class="add-pair btn btn-outline-success" type="button">Add New parameter for meter</button>
+    newSection.innerHTML = newSectionHtml + renderDiscoverySelect(mode) + renderDiscoveryTools() + `<button class="add-pair btn btn-outline-success" type="button">Add New parameter for meter</button>
                     <button class="delete-section btn btn-outline-danger" type="button">Remove meter</button><hr class="my-4">`;
     document.getElementById('sections').appendChild(newSection);
-
+    refreshDiscoveryState(newSection);
   };
+
+  // --- Manual MQTT discovery of a meter -------------------------------------
+  // A draft is made from the generated discovery of the meter (or uploaded),
+  // can be downloaded for editing and is applied after a preview of what it
+  // adds, changes and removes. Applying makes the meter "manual". The files
+  // belong to the meter id, see discovery_files.py and DOCS.md.
+  function renderDiscoveryTools() {
+    return `
+                <div class="meter-discovery-tools mb-3">
+                    <div class="discovery-state small text-muted mb-1">Discovery files: save the configuration to see them.</div>
+                    <div class="btn-group flex-wrap" role="group">
+                        <button class="discovery-generate btn btn-outline-secondary btn-sm" type="button">Generate draft</button>
+                        <button class="discovery-download btn btn-outline-secondary btn-sm" type="button">Download draft</button>
+                        <button class="discovery-upload btn btn-outline-secondary btn-sm" type="button">Upload draft</button>
+                        <button class="discovery-apply btn btn-outline-primary btn-sm" type="button">Apply as manual...</button>
+                    </div>
+                    <input class="discovery-file" type="file" accept=".json,application/json" hidden>
+                </div>`;
+  }
+
+  function meterIdOf(section) {
+    const keys = section.querySelectorAll('.section-key');
+    const values = section.querySelectorAll('.section-value');
+    for (let i = 0; i < keys.length; i++) {
+      if (keys[i].value === 'id') {
+        return values[i].value.trim();
+      }
+    }
+    return '';
+  }
+
+  function describeFile(label, file) {
+    if (!file) {
+      return `${label}: none`;
+    }
+    const when = file.modified ? new Date(file.modified * 1000).toLocaleString() : '';
+    return `${label}: ${file.entities} entities${when ? ' (' + when + ')' : ''}`;
+  }
+
+  function refreshDiscoveryState(section) {
+    const state = section.querySelector('.discovery-state');
+    const id = meterIdOf(section);
+    if (!state) {
+      return;
+    }
+    if (!id) {
+      state.textContent = 'Discovery files: the meter needs an id.';
+      return;
+    }
+    fetch(`/discovery_api/${encodeURIComponent(id)}/status`)
+      .then(response => response.json())
+      .then(data => {
+        if (data.error) {
+          state.textContent = `Discovery files: ${data.error}`;
+          return;
+        }
+        state.textContent = [
+          describeFile('Generated', data.files.generated),
+          describeFile('Draft', data.files.drafts),
+          describeFile('Applied', data.files.applied)
+        ].join(' | ');
+      })
+      .catch(error => { state.textContent = `Discovery files: ${error}`; });
+  }
+
+  function showMessage(text, problems = [], reload = false) {
+    const popup = document.createElement('div');
+    popup.className = 'discovery-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);padding:20px;' +
+      'border:1px solid #ccc;background:#fff;z-index:9999;max-width:90vw;max-height:80vh;overflow:auto';
+    let html = `<p>${escapeHtml(text)}</p>`;
+    if (problems.length) {
+      html += '<ul>' + problems.map(p => `<li>${escapeHtml(p)}</li>`).join('') + '</ul>';
+    }
+    popup.innerHTML = html + '<button class="btn btn-outline-success" type="button">Ok</button>';
+    popup.querySelector('button').addEventListener('click', () => {
+      popup.remove();
+      if (reload) {
+        location.reload();
+      }
+    });
+    document.body.appendChild(popup);
+  }
+
+  function topicList(title, topics) {
+    if (!topics.length) {
+      return '';
+    }
+    const items = topics.map(t => `<li><code>${escapeHtml(t)}</code></li>`).join('');
+    return `<p class="mb-1"><strong>${title} (${topics.length})</strong></p><ul class="small">${items}</ul>`;
+  }
+
+  function showPreview(id, preview, onApply) {
+    const popup = document.createElement('div');
+    popup.className = 'discovery-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);padding:20px;' +
+      'border:1px solid #ccc;background:#fff;z-index:9999;max-width:90vw;max-height:80vh;overflow:auto';
+    popup.innerHTML = `<h5>Apply the draft of meter ${escapeHtml(id)}?</h5>` +
+      topicList('Added', preview.added) +
+      topicList('Changed', preview.changed) +
+      topicList('Removed from Home Assistant', preview.removed) +
+      `<p class="small text-muted">Unchanged: ${preview.unchanged.length}. The meter uses the manual mode afterwards; ` +
+      'the add-on publishes this configuration at every start until you apply another one.</p>' +
+      '<button class="preview-apply btn btn-outline-primary" type="button">Apply</button> ' +
+      '<button class="preview-cancel btn btn-outline-secondary" type="button">Cancel</button>';
+    popup.querySelector('.preview-cancel').addEventListener('click', () => popup.remove());
+    popup.querySelector('.preview-apply').addEventListener('click', () => {
+      popup.remove();
+      onApply();
+    });
+    document.body.appendChild(popup);
+  }
+
+  function discoveryRequest(url, options = {}) {
+    return fetch(url, options).then(response =>
+      response.json().then(data => ({ ok: response.ok, status: response.status, data })));
+  }
+
+  function generateDraft(section, id, force = false) {
+    discoveryRequest(`/discovery_api/${encodeURIComponent(id)}/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force })
+    }).then(({ ok, data }) => {
+      if (!ok && data.confirm && !force) {
+        if (confirm(`${data.error} Replace it?`)) {
+          generateDraft(section, id, true);
+        }
+        return;
+      }
+      showMessage(ok ? data.message : data.error);
+      refreshDiscoveryState(section);
+    }).catch(error => showMessage(String(error)));
+  }
+
+  document.addEventListener('click', event => {
+    const target = event.target;
+    if (!target || !target.closest) {
+      return;
+    }
+    const section = target.closest('.json-section');
+    if (!section) {
+      return;
+    }
+    const id = meterIdOf(section);
+    const known = ['discovery-generate', 'discovery-download', 'discovery-upload', 'discovery-apply'];
+    if (!known.some(c => target.classList.contains(c))) {
+      return;
+    }
+    if (!id) {
+      showMessage('The meter needs an id first.');
+      return;
+    }
+    if (target.classList.contains('discovery-generate')) {
+      generateDraft(section, id);
+    } else if (target.classList.contains('discovery-download')) {
+      fetch(`/discovery_api/${encodeURIComponent(id)}/file?kind=drafts`)
+        .then(response => {
+          if (!response.ok) {
+            return response.json().then(data => { throw new Error(data.error); });
+          }
+          return response.blob();
+        })
+        .then(blob => {
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(blob);
+          link.download = `wmbusmeters_discovery_${id}.json`;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+        })
+        .catch(error => showMessage(error.message));
+    } else if (target.classList.contains('discovery-upload')) {
+      section.querySelector('.discovery-file').click();
+    } else if (target.classList.contains('discovery-apply')) {
+      discoveryRequest(`/discovery_api/${encodeURIComponent(id)}/preview`)
+        .then(({ ok, data }) => {
+          if (!ok) {
+            showMessage(data.error, data.problems || []);
+            return;
+          }
+          showPreview(id, data, () => {
+            discoveryRequest(`/discovery_api/${encodeURIComponent(id)}/apply`, { method: 'POST' })
+              .then(({ ok, data }) => showMessage(ok ? data.message : data.error, data.problems || [], ok))
+              .catch(error => showMessage(String(error)));
+          });
+        })
+        .catch(error => showMessage(String(error)));
+    }
+  });
+
+  document.addEventListener('change', event => {
+    const target = event.target;
+    if (!target || !target.classList || !target.classList.contains('discovery-file') || !target.files.length) {
+      return;
+    }
+    const section = target.closest('.json-section');
+    const id = meterIdOf(section);
+    target.files[0].text()
+      .then(text => discoveryRequest(`/discovery_api/${encodeURIComponent(id)}/draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: text
+      }))
+      .then(({ ok, data }) => {
+        showMessage(ok ? data.message : data.error, data.problems || []);
+        refreshDiscoveryState(section);
+      })
+      .catch(error => showMessage(String(error)))
+      .finally(() => { target.value = ''; });
+  });
+
   // delete a section
   document.addEventListener('click', event => {
     if (event.target && event.target.classList.contains('delete-section')) {
