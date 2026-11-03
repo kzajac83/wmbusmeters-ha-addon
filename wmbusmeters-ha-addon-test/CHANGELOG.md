@@ -1,3 +1,5 @@
+## 3.1.2.4
+- Local HA test build on top of 3.1.2.3: the panel's discovery actions (generate, upload, apply, removed topics, the switch to manual) are written to the add-on log.
 ## 3.1.2.3
 - Local HA test build on top of 3.1.2.2: Apply as manual publishes all entities in one go (seconds instead of about a second per entity), every discovery action in the panel shows a spinner with what it is doing, and the generated discovery is kept across restarts, so a draft holds every telegram format.
 ## 3.1.2.2
