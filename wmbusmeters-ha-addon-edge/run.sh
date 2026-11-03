@@ -22,7 +22,7 @@ fi
 
 if [ ! -f ${CONFIG_PATH} ]
 then
-    echo '{"data_path": "/homeassistant/wmbusmeters", "enable_mqtt_discovery": "false", "conf": {"loglevel": "normal", "device": "auto:t1", "addtelegramdetails":"first", "donotprobe": "/dev/ttyAMA0", "logtelegrams": "false", "format": "json", "logfile": "/dev/stdout", "shell": "/wmbusmeters/mosquitto_pub.sh \"wmbusmeters/$METER_NAME\" \"$METER_JSON\"", "metershell": "send_meter_discovery.sh \"$METER_JSON\" \"$METER_DRIVER\""}, "meters": [], "mqtt": {}}' | jq . > ${CONFIG_PATH}
+    echo '{"data_path": "/homeassistant/wmbusmeters", "mqtt_discovery": "disable", "conf": {"loglevel": "normal", "device": "auto:t1", "addtelegramdetails":"first", "donotprobe": "/dev/ttyAMA0", "logtelegrams": "false", "format": "json", "logfile": "/dev/stdout", "shell": "/wmbusmeters/mosquitto_pub.sh \"wmbusmeters/$METER_NAME\" \"$METER_JSON\"", "metershell": "send_meter_discovery.sh \"$METER_JSON\" \"$METER_DRIVER\""}, "meters": [], "mqtt": {}}' | jq . > ${CONFIG_PATH}
 fi
 
 # Ensure metershell (first-telegram MQTT discovery) exists for pre-existing configs
@@ -39,6 +39,25 @@ if [ "$(jq -r '.conf | has("telegramdetails")' ${CONFIG_PATH} 2>/dev/null)" = "t
     jq '.conf.addtelegramdetails //= .conf.telegramdetails | del(.conf.telegramdetails)' ${CONFIG_PATH} > ${tmp_cfg} && mv ${tmp_cfg} ${CONFIG_PATH}
 fi
 
+# "Enable mqtt discovery" (true/false) became the three-way "mqtt_discovery"
+# (disable/auto/manual): true -> auto, false -> disable. An existing choice of
+# the new option always wins, the old key is only read once and then dropped.
+# BEGIN mqtt discovery mode migration
+legacy_flag=$(jq -r '.enable_mqtt_discovery | tostring' ${CONFIG_PATH} 2>/dev/null)
+if [ -n "${legacy_flag}" ] && [ "${legacy_flag}" != "null" ]; then
+    mode=$(jq -r '.mqtt_discovery // empty' ${CONFIG_PATH} 2>/dev/null)
+    if [ -z "${mode}" ]; then
+        case "${legacy_flag}" in
+            true) mode=auto ;;
+            *)    mode=disable ;;
+        esac
+        bashio::log.info "MQTT discovery mode \"${mode}\" takes over the old \"Enable mqtt discovery\": ${legacy_flag} ..."
+    fi
+    tmp_cfg=$(mktemp)
+    jq --arg m "${mode}" '.mqtt_discovery = $m | del(.enable_mqtt_discovery)' ${CONFIG_PATH} > ${tmp_cfg} && mv ${tmp_cfg} ${CONFIG_PATH}
+fi
+# END mqtt discovery mode migration
+
 # MQTT discovery is now sent on demand. When the FIRST telegram from a
 # meter arrives then this happens:
 # wmbusmeters executes the "metershell" config setting which
@@ -51,12 +70,37 @@ fi
 if [ "${RESET_CONF}" = "yes" ]
 then
     bashio::log.info "RESET CONFIG selected - reseting add-on configuration to default ..."
-    echo '{"data_path": "/homeassistant/wmbusmeters", "enable_mqtt_discovery": "false", "conf": {"loglevel": "normal", "device": "auto:t1", "addtelegramdetails":"first", "donotprobe": "/dev/ttyAMA0", "logtelegrams": "false", "format": "json", "logfile": "/dev/stdout", "shell": "/wmbusmeters/mosquitto_pub.sh \"wmbusmeters/$METER_NAME\" \"$METER_JSON\"", "metershell": "send_meter_discovery.sh \"$METER_JSON\" \"$METER_DRIVER\""}, "meters": [], "mqtt": {}}' | jq . > ${CONFIG_PATH}
-    bashio::addon.option "reset_config" "no"
-    bashio::addon.restart
+    echo '{"data_path": "/homeassistant/wmbusmeters", "mqtt_discovery": "disable", "conf": {"loglevel": "normal", "device": "auto:t1", "addtelegramdetails":"first", "donotprobe": "/dev/ttyAMA0", "logtelegrams": "false", "format": "json", "logfile": "/dev/stdout", "shell": "/wmbusmeters/mosquitto_pub.sh \"wmbusmeters/$METER_NAME\" \"$METER_JSON\"", "metershell": "send_meter_discovery.sh \"$METER_JSON\" \"$METER_DRIVER\""}, "meters": [], "mqtt": {}}' | jq . > ${CONFIG_PATH}
+    bashio::app.option "reset_config" "no"
+    bashio::app.restart
 fi
 
 CONFIG_DATA_PATH=$(bashio::jq "${CONFIG_PATH}" '.data_path')
+
+# The selected "MQTT discovery" mode is announced at every start, so that the
+# log shows it without opening the panel (docs: "MQTT discovery" in DOCS.md).
+MQTT_DISCOVERY_MODE="$(jq -r '.mqtt_discovery // empty' ${CONFIG_PATH} 2>/dev/null)"
+case "${MQTT_DISCOVERY_MODE}" in
+    auto)    bashio::log.info "MQTT discovery mode: auto - the generated discovery is published when the first telegram of a meter arrives";;
+    manual)  bashio::log.info "MQTT discovery mode: manual - the configuration applied in the panel for every meter is published at start-up";;
+    disable) bashio::log.info "MQTT discovery mode: disable - no Home Assistant entities are created or updated; the meter data is still published to MQTT";;
+    *)       bashio::log.warning "MQTT discovery mode is '${MQTT_DISCOVERY_MODE}', not one of auto, manual, disable - nothing is published";;
+esac
+
+# A meter may carry its own "mqtt_discovery" key and then ignores the add-on
+# mode above (the panel shows the choice under every meter, see DOCS.md). Log
+# the meters that deviate, so the log shows the effective mode of every meter.
+# BEGIN mqtt discovery meters
+jq -r --arg default "${MQTT_DISCOVERY_MODE}" '
+    .meters[]?
+    | select((.mqtt_discovery // "") | test("^(auto|manual|disable)$"))
+    | select(.mqtt_discovery != $default)
+    | "MQTT discovery: meter \"\(.name)\" uses \(.mqtt_discovery) (add-on default: \($default))"' \
+    ${CONFIG_PATH} 2>/dev/null | while IFS= read -r override
+do
+    [ -n "${override}" ] && bashio::log.info "${override}"
+done
+# END mqtt discovery meters
 
 # f21a2e3a replaced the config mapping with homeassistant_config, which mounts
 # the HA configuration at /homeassistant instead of /config. A data_path under
@@ -197,6 +241,7 @@ done < $CONFIG_DATA_PATH/etc/wmbusmeters.conf > $CONFIG_DATA_PATH/etc/wmbusmeter
 mv $CONFIG_DATA_PATH/etc/wmbusmeters.conf_tmp $CONFIG_DATA_PATH/etc/wmbusmeters.conf
 # END conf split
 
+# BEGIN register meters
 bashio::log.info "Registering meters ..."
 rm -f $CONFIG_DATA_PATH/etc/wmbusmeters.d/*
 meter_no=0
@@ -206,9 +251,13 @@ do
     meter_no=$(( meter_no+1 ))
     METER_NAME=$(printf 'meter-%04d' "$(( meter_no ))")
     bashio::log.info "Adding $METER_NAME ..."
-    METER_DATA=$(printf '%s\n' $meter | jq --raw-output -c -M '.')
+    # A meter may carry the add-on's own "mqtt_discovery" key (its own MQTT
+    # discovery mode, see DOCS.md). wmbusmeters does not know the key, so it is
+    # dropped from the meter file here.
+    METER_DATA=$(printf '%s\n' $meter | jq --raw-output -c -M 'del(.mqtt_discovery)')
     echo -e "$METER_DATA" | jq -r 'to_entries|map("\(.key)=\(.value|tostring)")|.[]' > $CONFIG_DATA_PATH/etc/wmbusmeters.d/$METER_NAME
 done
+# END register meters
 
 bashio::log.info "Generating MQTT configuration ... "
 if bashio::jq.exists "${CONFIG_PATH}" ".mqtt.server"
@@ -258,6 +307,41 @@ case "\$1" in
 esac
 EOL
     chmod a+x /wmbusmeters/mosquitto_retained.sh
+
+    # Used by the panel to apply a manual configuration: many topics in one start
+    # of the helper instead of one start per topic.
+    cat > /wmbusmeters/mosquitto_batch.sh << EOL
+#!/usr/bin/with-contenv bashio
+# publish <file>: every line "<topic><TAB><payload>" is published retained
+# clear <file>: every line is a topic whose retained message is removed
+case "\$1" in
+    publish) while IFS=\$'\t' read -r topic payload; do /usr/bin/mosquitto_pub ${pub_args_quoted[@]} -r -t "\$topic" -m "\$payload" || exit 1; done < "\$2" ;;
+    clear)   while read -r topic; do /usr/bin/mosquitto_pub ${pub_args_quoted[@]} -r -t "\$topic" -n; done < "\$2" ;;
+esac
+EOL
+    chmod a+x /wmbusmeters/mosquitto_batch.sh
+
+    # HA's discovery prefix, for the manual discovery that the panel applies.
+    MQTT_DISCOVERY_PREFIX="homeassistant"
+    if bashio::services.available "mqtt"; then
+        prefix=$(bashio::services mqtt "discovery_prefix")
+        if [ -n "$prefix" ] && [ "$prefix" != "null" ]; then
+            MQTT_DISCOVERY_PREFIX="$prefix"
+        fi
+    fi
+    printf '%s\n' "$MQTT_DISCOVERY_PREFIX" > /wmbusmeters/discovery_prefix
+
+    # Manual MQTT discovery: publish the configuration applied in the panel
+    # for the meters whose mode is manual - the add-on mode above or the
+    # meter's own "mqtt_discovery" key. "auto" is
+    # published by send_meter_discovery.sh when a telegram arrives and
+    # "disable" publishes nothing.
+    # BEGIN manual discovery call
+    MANUAL_METERS=$(jq -r '[.meters[]? | select((.mqtt_discovery // "") == "manual")] | length' ${CONFIG_PATH} 2>/dev/null)
+    if [ "${MQTT_DISCOVERY_MODE}" = "manual" ] || [ "${MANUAL_METERS:-0}" != "0" ]; then
+        /mqtt_discovery.sh ${pub_args[@]} -c ${CONFIG_PATH} -w ${CONFIG_DATA_PATH} || true
+    fi
+    # END manual discovery call
 
 fi
 
