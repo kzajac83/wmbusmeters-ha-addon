@@ -1,3 +1,5 @@
+## 3.1.2.5
+- Local HA test build on top of 3.1.2.4: replacing a draft asks in a panel popup (Replace / Cancel) instead of the browser's dialog, the spinner closes before the question, and a clicked button no longer looks empty while it waits.
 ## 3.1.2.4
 - Local HA test build on top of 3.1.2.3: the panel's discovery actions (generate, upload, apply, removed topics, the switch to manual) are written to the add-on log.
 ## 3.1.2.3
