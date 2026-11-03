@@ -1605,6 +1605,10 @@ def test_panel_manual_discovery(tmp):
         check('sub_filter "/discovery_api/" "$http_x_ingress_path/discovery_api/";' in nginx,
               f"{addon} ingress rewrites the /discovery_api/ paths")
         check("import discovery_files" in app, f"{addon} app.py uses discovery_files.py")
+        for what in ("generated:", "uploaded:", "refused:", "applied:", "failed, nothing changed", "uses the manual MQTT discovery mode now"):
+            check(what in app, f"{addon} app.py logs the panel action '{what}'")
+        check("def panel_log" in app and "flush=True" in app.split("def panel_log", 1)[1][:400],
+              f"{addon} app.py writes the panel lines to the add-on log at once")
         check("function showBusy" in js and "spinner-border" in js and js.count("showBusy(") >= 6,
               f"{addon} panel shows a busy indicator for every discovery action")
         check("MQTT_BATCH, 'publish'" in app and "MQTT_BATCH, 'clear'" in app,

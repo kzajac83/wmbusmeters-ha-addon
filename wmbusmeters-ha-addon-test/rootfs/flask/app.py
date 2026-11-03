@@ -277,6 +277,11 @@ def check_filename():
 # See discovery_files.py and the "MQTT discovery" section of DOCS.md.
 
 MQTT_BATCH = '/wmbusmeters/mosquitto_batch.sh'
+
+
+def panel_log(message, level='INFO'):
+    """A line in the add-on log, in the format of the bashio lines around it."""
+    print(f"[{time.strftime('%H:%M:%S')}] {level}: panel: {message}", flush=True)
 MQTT_RETAINED = '/wmbusmeters/mosquitto_retained.sh'
 DISCOVERY_PREFIX_FILE = '/wmbusmeters/discovery_prefix'
 
@@ -346,6 +351,7 @@ def discovery_generate(meter_id):
         return jsonify({'error': 'This meter already has a different draft. Generating replaces it.',
                         'confirm': True}), 409
     discovery_files.save('drafts', meter_id, generated)
+    panel_log(f"draft of meter {meter.get('name', '')} ({meter_id}) generated: {len(generated)} entities")
     return jsonify({'message': f'Draft generated with {len(generated)} entities.'})
 
 
@@ -377,8 +383,10 @@ def discovery_upload(meter_id):
         return jsonify({'error': f'The file is not valid JSON: {e}'}), 400
     problems = discovery_files.validate(data)
     if problems:
+        panel_log(f"uploaded draft of meter {meter.get('name', '')} ({meter_id}) refused: {'; '.join(problems)}", 'WARNING')
         return jsonify({'error': 'The file cannot be used as a draft.', 'problems': problems}), 400
     discovery_files.save('drafts', meter_id, data)
+    panel_log(f"draft of meter {meter.get('name', '')} ({meter_id}) uploaded: {len(data)} entities")
     return jsonify({'message': f'Draft saved with {len(data)} entities.'})
 
 
@@ -441,6 +449,8 @@ def discovery_apply(meter_id):
     finally:
         os.remove(publish_file)
     if out.returncode != 0:
+        panel_log(f"applying the draft of meter {meter.get('name', '')} ({meter_id}) failed, nothing changed: "
+                  f"{out.stderr.strip()}", 'WARNING')
         return jsonify({'error': 'Publishing failed, the applied configuration is unchanged: '
                                  f'{out.stderr.strip()}'}), 502
     removed = [t for t in discovery_files.meter_topics(retained, meter_id) if t not in new_topics]
@@ -453,6 +463,10 @@ def discovery_apply(meter_id):
         finally:
             os.remove(clear_file)
     discovery_files.save('applied', meter_id, draft)
+    panel_log(f"MQTT discovery (manual) of meter {meter.get('name', '')} ({meter_id}) applied: "
+              f"published {len(new_topics)} entities, removed {len(removed)}")
+    for topic in removed:
+        panel_log(f"removed discovery that the applied configuration does not hold: {topic}")
     # The meter is manual from now on: the generated discovery does not replace it.
     config = read_config()
     found = discovery_files.find_meter(config, meter_id)
@@ -460,6 +474,7 @@ def discovery_apply(meter_id):
         found['mqtt_discovery'] = 'manual'
         with open(cfgfile, 'w') as f:
             json.dump(config, f, indent=True)
+        panel_log(f"meter {meter.get('name', '')} ({meter_id}) uses the manual MQTT discovery mode now")
     return jsonify({'message': f'Applied: {len(new_topics)} entities published, {len(removed)} removed. '
                                f'The meter uses the manual mode now.',
                     'published': len(new_topics), 'removed': removed})
