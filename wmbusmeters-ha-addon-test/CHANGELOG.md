@@ -1,3 +1,19 @@
+# 3.1.2.9 (local test build)
+- panel: both MQTT rows share one label width, no line under Meters, no sentence in the manual discovery box
+
+# 3.1.2.8 (local test build)
+- panel: every meter a card titled name (driver, id), one width for the name column, draft buttons in a titled box Manual MQTT discovery (Home Assistant entities)
+- log: metershell lines with time stamp and green like the add-on, every published topic listed
+
+# 3.1.2.7 (local test build)
+- libasan.so.8 in the runtime image, wmbusmeters starts again (DEBUG build)
+- panel: "MQTT discovery (default for all meters)", a per-meter row aligned with the fields, "Add-on default (...)" names the mode, meter fields in the order name, driver, id, key
+
+# 3.1.2.6 (local test build)
+- #114 rebased on main (onchange, DEBUG build), addtelegramdetails first -> onchange once at start
+- #2169: device serial_number stays a string
+- wmbusmeters master with the fhkvdataiii fix (kzajac83/wmbusmeters fhkvdataiii-nan-dates)
+
 ## 3.1.1.24 
 - Updated to version [3.1.1.24](https://github.com/wmbusmeters/wmbusmeters/commits/master)
 ## 3.1.1.23 
